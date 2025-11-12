@@ -1,6 +1,10 @@
 package lexer
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/yarlson/yarlang/ast"
+)
 
 // TokenType represents the type of a token
 type TokenType int
@@ -52,6 +56,8 @@ const (
 	FOR      // for
 	BREAK    // break
 	CONTINUE // continue
+	IMPORT   // import
+	AS       // as (for import aliases)
 	NIL      // nil
 	TRUE     // true
 	FALSE    // false
@@ -93,6 +99,8 @@ var tokenNames = map[TokenType]string{
 	FOR:       "FOR",
 	BREAK:     "BREAK",
 	CONTINUE:  "CONTINUE",
+	IMPORT:    "IMPORT",
+	AS:        "AS",
 	NIL:       "NIL",
 	TRUE:      "TRUE",
 	FALSE:     "FALSE",
@@ -118,6 +126,15 @@ func (t Token) String() string {
 	return fmt.Sprintf("%s(%s) at %d:%d", t.Type, t.Literal, t.Line, t.Column)
 }
 
+// Position returns the position of this token as an ast.Position
+func (t Token) Position() ast.Position {
+	return ast.Position{
+		Line:   t.Line,
+		Column: t.Column,
+		Offset: -1,
+	}
+}
+
 // Keywords maps keyword strings to their token types
 var Keywords = map[string]TokenType{
 	"func":     FUNC,
@@ -127,6 +144,8 @@ var Keywords = map[string]TokenType{
 	"for":      FOR,
 	"break":    BREAK,
 	"continue": CONTINUE,
+	"import":   IMPORT,
+	"as":       AS,
 	"nil":      NIL,
 	"true":     TRUE,
 	"false":    FALSE,

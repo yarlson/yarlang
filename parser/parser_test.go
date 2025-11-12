@@ -694,3 +694,109 @@ func add(a, b) {
 		t.Errorf("Expected 2 param ranges, got %d", len(fn.ParamRanges))
 	}
 }
+
+func TestParseImportStatement(t *testing.T) {
+	input := `import "math"`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements should have 1 statement. got=%d",
+			len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ImportStmt)
+	if !ok {
+		t.Fatalf("statement is not *ast.ImportStmt. got=%T",
+			program.Statements[0])
+	}
+
+	if stmt.Path != "math" {
+		t.Errorf("import path wrong. expected=%q, got=%q",
+			"math", stmt.Path)
+	}
+
+	if stmt.Alias != "" {
+		t.Errorf("import alias should be empty. got=%q", stmt.Alias)
+	}
+}
+
+func TestParseImportWithAlias(t *testing.T) {
+	input := `import "math" as m`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement. got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ImportStmt)
+	if !ok {
+		t.Fatalf("not *ast.ImportStmt. got=%T", program.Statements[0])
+	}
+
+	if stmt.Path != "math" {
+		t.Errorf("path wrong. expected=%q, got=%q", "math", stmt.Path)
+	}
+
+	if stmt.Alias != "m" {
+		t.Errorf("alias wrong. expected=%q, got=%q", "m", stmt.Alias)
+	}
+}
+
+func TestParseImportBlock(t *testing.T) {
+	input := `import (
+    "math"
+    "strings" as str
+    "io"
+)`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement. got=%d", len(program.Statements))
+	}
+
+	block, ok := program.Statements[0].(*ast.ImportBlock)
+	if !ok {
+		t.Fatalf("not *ast.ImportBlock. got=%T", program.Statements[0])
+	}
+
+	if len(block.Imports) != 3 {
+		t.Fatalf("expected 3 imports. got=%d", len(block.Imports))
+	}
+
+	tests := []struct {
+		expectedPath  string
+		expectedAlias string
+	}{
+		{"math", ""},
+		{"strings", "str"},
+		{"io", ""},
+	}
+
+	for i, tt := range tests {
+		imp := block.Imports[i]
+		if imp.Path != tt.expectedPath {
+			t.Errorf("import[%d] path wrong. expected=%q, got=%q",
+				i, tt.expectedPath, imp.Path)
+		}
+
+		if imp.Alias != tt.expectedAlias {
+			t.Errorf("import[%d] alias wrong. expected=%q, got=%q",
+				i, tt.expectedAlias, imp.Alias)
+		}
+	}
+}

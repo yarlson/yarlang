@@ -148,3 +148,31 @@ check = true && false || !true
 		}
 	}
 }
+
+func TestImportKeyword(t *testing.T) {
+	input := `import "math"`
+
+	l := New(input)
+
+	tests := []struct {
+		expectedType    TokenType
+		expectedLiteral string
+	}{
+		{IMPORT, "import"},
+		{STRING, "math"},
+		{EOF, ""},
+	}
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+		if tok.Type != tt.expectedType {
+			t.Fatalf("tests[%d] - wrong type. expected=%q, got=%q",
+				i, tt.expectedType, tok.Type)
+		}
+
+		if tok.Literal != tt.expectedLiteral {
+			t.Fatalf("tests[%d] - wrong literal. expected=%q, got=%q",
+				i, tt.expectedLiteral, tok.Literal)
+		}
+	}
+}

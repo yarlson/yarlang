@@ -7,6 +7,15 @@ type Position struct {
 	Offset int // 0-based byte offset (optional, -1 if unknown)
 }
 
+// WithOffset returns a new position with the column offset by n characters
+func (p Position) WithOffset(n int) Position {
+	return Position{
+		Line:   p.Line,
+		Column: p.Column + n,
+		Offset: -1,
+	}
+}
+
 // Range represents a range in source code from Start to End
 type Range struct {
 	Start Position

@@ -254,6 +254,8 @@ func (p *Parser) ParseProgram() *ast.Program {
 
 func (p *Parser) parseStatement() ast.Stmt {
 	switch p.curToken.Type {
+	case lexer.IMPORT:
+		return p.parseImportStatement()
 	case lexer.RETURN:
 		return p.parseReturnStmt()
 	case lexer.IF:
@@ -777,4 +779,108 @@ func (p *Parser) parseFuncDecl() ast.Stmt {
 		NameRange:   nameRange,
 		ParamRanges: paramRanges,
 	}
+}
+
+func (p *Parser) parseImportStatement() ast.Stmt {
+	startPos := p.curToken.Position()
+
+	// Check if it's a block: import (
+	if p.peekTokenIs(lexer.LPAREN) {
+		return p.parseImportBlock(startPos)
+	}
+
+	// Single import
+	stmt := &ast.ImportStmt{
+		Range: ast.Range{Start: startPos},
+	}
+
+	if !p.expectPeek(lexer.STRING) {
+		return nil
+	}
+
+	stmt.Path = p.curToken.Literal
+	stmt.PathRange = ast.Range{
+		Start: p.curToken.Position(),
+		End:   p.curToken.Position().WithOffset(len(p.curToken.Literal)),
+	}
+
+	// Check for optional "as alias"
+	if p.peekTokenIs(lexer.AS) {
+		p.nextToken() // consume 'as'
+
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+
+		stmt.Alias = p.curToken.Literal
+	}
+
+	stmt.Range.End = p.curToken.Position().WithOffset(len(p.curToken.Literal))
+
+	return stmt
+}
+
+func (p *Parser) parseImportBlock(startPos ast.Position) ast.Stmt {
+	block := &ast.ImportBlock{
+		Range:   ast.Range{Start: startPos},
+		Imports: []*ast.ImportStmt{},
+	}
+
+	p.nextToken() // consume 'import'
+	p.nextToken() // consume '('
+
+	// Skip newlines
+	for p.curTokenIs(lexer.NEWLINE) {
+		p.nextToken()
+	}
+
+	for !p.curTokenIs(lexer.RPAREN) && !p.curTokenIs(lexer.EOF) {
+		if p.curTokenIs(lexer.NEWLINE) {
+			p.nextToken()
+			continue
+		}
+
+		if !p.curTokenIs(lexer.STRING) {
+			p.errors = append(p.errors,
+				fmt.Sprintf("expected string in import block, got %s", p.curToken.Type))
+
+			return nil
+		}
+
+		imp := &ast.ImportStmt{
+			Path: p.curToken.Literal,
+			PathRange: ast.Range{
+				Start: p.curToken.Position(),
+				End:   p.curToken.Position().WithOffset(len(p.curToken.Literal)),
+			},
+			Range: ast.Range{Start: p.curToken.Position()},
+		}
+
+		// Check for alias
+		if p.peekTokenIs(lexer.AS) {
+			p.nextToken() // move to 'as'
+
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+
+			imp.Alias = p.curToken.Literal
+			imp.Range.End = p.curToken.Position().WithOffset(len(p.curToken.Literal))
+		} else {
+			imp.Range.End = p.curToken.Position().WithOffset(len(p.curToken.Literal))
+		}
+
+		block.Imports = append(block.Imports, imp)
+
+		p.nextToken()
+	}
+
+	if !p.curTokenIs(lexer.RPAREN) {
+		p.errors = append(p.errors, "expected ')' to close import block")
+		return nil
+	}
+
+	block.Range.End = p.curToken.Position().WithOffset(1)
+
+	return block
 }

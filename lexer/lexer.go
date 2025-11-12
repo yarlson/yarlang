@@ -180,7 +180,7 @@ func (l *Lexer) skipComment() {
 
 func (l *Lexer) readIdentifier() string {
 	position := l.position
-	for isLetter(l.ch) || isDigit(l.ch) {
+	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '.' {
 		l.readChar()
 	}
 

@@ -261,3 +261,46 @@ func (f *FuncDecl) stmtNode() {}
 func (f *FuncDecl) String() string {
 	return fmt.Sprintf("func %s(%s) %s", f.Name, strings.Join(f.Params, ", "), f.Body.String())
 }
+
+// ImportStmt represents a single import statement
+type ImportStmt struct {
+	Path      string // Import path (e.g., "math", "./utils")
+	Alias     string // Optional alias (e.g., "m" in: import "math" as m)
+	Range     Range  // Entire import statement range
+	PathRange Range  // Just the path string range
+}
+
+func (i *ImportStmt) stmtNode() {}
+func (i *ImportStmt) String() string {
+	if i.Alias != "" {
+		return fmt.Sprintf(`import "%s" as %s`, i.Path, i.Alias)
+	}
+
+	return fmt.Sprintf(`import "%s"`, i.Path)
+}
+
+// ImportBlock represents an import block: import ( ... )
+type ImportBlock struct {
+	Imports []*ImportStmt
+	Range   Range // Entire block range including parens
+}
+
+func (i *ImportBlock) stmtNode() {}
+func (i *ImportBlock) String() string {
+	var out strings.Builder
+	out.WriteString("import (\n")
+
+	for _, imp := range i.Imports {
+		// Remove "import " prefix from individual imports
+		path := imp.Path
+		if imp.Alias != "" {
+			out.WriteString(fmt.Sprintf("  \"%s\" as %s\n", path, imp.Alias))
+		} else {
+			out.WriteString(fmt.Sprintf("  \"%s\"\n", path))
+		}
+	}
+
+	out.WriteString(")")
+
+	return out.String()
+}

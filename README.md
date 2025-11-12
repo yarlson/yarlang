@@ -40,6 +40,106 @@ YarLang is a modern scripting language that combines the simplicity of dynamic t
 - Multiple return values
 - Built-in functions: `print`, `println`, `len`, `type`
 
+## Module System
+
+YarLang supports splitting code across multiple files using Go-style imports.
+
+### Creating a Project
+
+```bash
+yar init
+```
+
+This creates a `yar.toml` file:
+
+```toml
+[package]
+name = "myproject"
+version = "0.1.0"
+entry = "main.yar"
+```
+
+### Importing Modules
+
+**Single import:**
+```go
+import "math"
+```
+
+**Import block:**
+```go
+import (
+    "math"
+    "strings" as str
+    "io"
+)
+```
+
+**Using imports:**
+```go
+import "math"
+
+func main() {
+    x := math.Sqrt(16)  // Qualified access
+    println(x)
+}
+```
+
+### Exports
+
+Functions with capital letters are exported:
+
+```go
+// math.yar
+func Sqrt(x) {     // Exported
+    return x
+}
+
+func internal() {  // Private
+    return 42
+}
+```
+
+### Building Projects
+
+```bash
+yar build   # Build project
+yar run     # Build and run
+yar clean   # Remove build artifacts
+yar check   # Check without building
+```
+
+### Module Resolution
+
+Import paths are resolved in this order:
+
+1. **Local files** - Current directory and parents up to `yar.toml`
+2. **Standard library** - `~/.yar/stdlib/`
+3. **Third-party** - `~/.yar/pkg/` (future)
+
+Use `std/` prefix to force stdlib: `import "std/math"`
+
+### Standard Library
+
+Initial stdlib modules:
+
+- `math` - Mathematical functions
+- `strings` - String utilities
+- `io` - Input/output
+- `os` - Operating system interface
+
+### Project Structure
+
+```
+myproject/
+  yar.toml         # Project manifest
+  main.yar         # Entry point
+  math.yar         # Local module
+  utils/           # Nested modules
+    strings.yar
+  build/           # Generated (gitignored)
+```
+
 ## Prerequisites
 
 To build and run YarLang, you need:

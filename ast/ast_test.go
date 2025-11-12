@@ -94,3 +94,43 @@ func TestStatementNodesHaveRange(t *testing.T) {
 		ParamRanges: []Range{{}},
 	}
 }
+
+func TestImportStmtString(t *testing.T) {
+	stmt := &ImportStmt{
+		Path: "math",
+	}
+
+	expected := `import "math"`
+	if stmt.String() != expected {
+		t.Errorf("String() wrong. expected=%q, got=%q",
+			expected, stmt.String())
+	}
+}
+
+func TestImportStmtWithAlias(t *testing.T) {
+	stmt := &ImportStmt{
+		Path:  "math",
+		Alias: "m",
+	}
+
+	expected := `import "math" as m`
+	if stmt.String() != expected {
+		t.Errorf("String() wrong. expected=%q, got=%q",
+			expected, stmt.String())
+	}
+}
+
+func TestImportBlockString(t *testing.T) {
+	block := &ImportBlock{
+		Imports: []*ImportStmt{
+			{Path: "math"},
+			{Path: "strings", Alias: "str"},
+		},
+	}
+
+	expected := "import (\n  \"math\"\n  \"strings\" as str\n)"
+	if block.String() != expected {
+		t.Errorf("String() wrong. expected=%q, got=%q",
+			expected, block.String())
+	}
+}

@@ -29,6 +29,16 @@ type CodeGen struct {
 	// Loop tracking for break/continue
 	currentLoopExit llvm.BasicBlock // For break
 	currentLoopPost llvm.BasicBlock // For continue
+
+	// Module system support
+	moduleName        string
+	externalFunctions map[string]*ExternalFunc // Qualified name -> function info
+}
+
+type ExternalFunc struct {
+	ModuleName string
+	FuncName   string
+	ParamCount int
 }
 
 func New() *CodeGen {
@@ -37,13 +47,14 @@ func New() *CodeGen {
 	builder := context.NewBuilder()
 
 	gen := &CodeGen{
-		module:           module,
-		builder:          builder,
-		context:          context,
-		runtimeFuncs:     make(map[string]llvm.Value),
-		runtimeFuncTypes: make(map[string]llvm.Type),
-		variables:        make(map[string]llvm.Value),
-		variableTypes:    make(map[string]llvm.Type),
+		module:            module,
+		builder:           builder,
+		context:           context,
+		runtimeFuncs:      make(map[string]llvm.Value),
+		runtimeFuncTypes:  make(map[string]llvm.Type),
+		variables:         make(map[string]llvm.Value),
+		variableTypes:     make(map[string]llvm.Type),
+		externalFunctions: make(map[string]*ExternalFunc),
 	}
 
 	gen.declareRuntimeFunctions()
@@ -94,24 +105,102 @@ func (g *CodeGen) declareRuntimeFunctions() {
 	addFunc("yar_is_truthy", g.context.Int1Type(), []llvm.Type{valuePtr})
 }
 
+func (g *CodeGen) SetModuleName(name string) {
+	g.moduleName = name
+}
+
+func (g *CodeGen) RegisterExternalFunction(moduleName, funcName string, paramCount int) {
+	qualified := moduleName + "." + funcName
+	g.externalFunctions[qualified] = &ExternalFunc{
+		ModuleName: moduleName,
+		FuncName:   funcName,
+		ParamCount: paramCount,
+	}
+}
+
+func (g *CodeGen) generateExternalDeclarations() {
+	// Get the Value* type
+	valueType := g.context.StructType([]llvm.Type{
+		g.context.Int8Type(),
+		llvm.PointerType(g.context.Int8Type(), 0),
+	}, false)
+	valuePtr := llvm.PointerType(valueType, 0)
+
+	for _, ext := range g.externalFunctions {
+		// Generate: declare %Value* @module_Function(%Value*, ...)
+		mangledName := ext.ModuleName + "_" + ext.FuncName
+
+		params := make([]llvm.Type, ext.ParamCount)
+		for i := 0; i < ext.ParamCount; i++ {
+			params[i] = valuePtr
+		}
+
+		fnType := llvm.FunctionType(valuePtr, params, false)
+		llvm.AddFunction(g.module, mangledName, fnType)
+	}
+}
+
 func (g *CodeGen) Generate(program *ast.Program) error {
-	// Create main function
-	mainType := llvm.FunctionType(g.context.Int32Type(), []llvm.Type{}, false)
-	mainFunc := llvm.AddFunction(g.module, "main", mainType)
-	entry := g.context.AddBasicBlock(mainFunc, "entry")
-	g.builder.SetInsertPointAtEnd(entry)
+	// Generate external declarations first
+	g.generateExternalDeclarations()
 
-	g.currentFunc = mainFunc
+	// Check if this module has a main() function
+	var mainFuncDecl *ast.FuncDecl
 
-	// Generate code for statements
 	for _, stmt := range program.Statements {
-		if err := g.generateStmt(stmt); err != nil {
-			return err
+		if funcDecl, ok := stmt.(*ast.FuncDecl); ok && funcDecl.Name == "main" {
+			mainFuncDecl = funcDecl
+			break
 		}
 	}
 
-	// Return 0 from main
-	g.builder.CreateRet(llvm.ConstInt(g.context.Int32Type(), 0, false))
+	// Generate all function declarations first
+	for _, stmt := range program.Statements {
+		if funcDecl, ok := stmt.(*ast.FuncDecl); ok {
+			// For the entry point module, rename main() to yar_main to avoid conflict
+			if funcDecl.Name == "main" {
+				// Create a copy with renamed function
+				renamedDecl := *funcDecl
+
+				renamedDecl.Name = "yar_main"
+				if err := g.generateFuncDecl(&renamedDecl); err != nil {
+					return err
+				}
+			} else {
+				if err := g.generateFuncDecl(funcDecl); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	// For entry point modules, create LLVM main that calls yar_main and execute top-level statements
+	if mainFuncDecl != nil {
+		mainType := llvm.FunctionType(g.context.Int32Type(), []llvm.Type{}, false)
+		mainFunc := llvm.AddFunction(g.module, "main", mainType)
+		entry := g.context.AddBasicBlock(mainFunc, "entry")
+		g.builder.SetInsertPointAtEnd(entry)
+
+		// Generate top-level statements (assignments, expressions, etc.) before calling main
+		for _, stmt := range program.Statements {
+			if _, ok := stmt.(*ast.FuncDecl); !ok {
+				if err := g.generateStmt(stmt); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Call yar_main()
+		yarMainFunc := g.module.NamedFunction("yar_main")
+		if !yarMainFunc.IsNil() {
+			yarMainFuncType := yarMainFunc.GlobalValueType()
+			g.builder.CreateCall(yarMainFuncType, yarMainFunc, []llvm.Value{}, "")
+		}
+
+		// Return 0
+		g.builder.CreateRet(llvm.ConstInt(g.context.Int32Type(), 0, false))
+	}
+	// Note: Library modules (without main) don't execute top-level statements
 
 	return nil
 }
@@ -148,6 +237,12 @@ func (g *CodeGen) generateStmt(stmt ast.Stmt) error {
 
 		g.builder.CreateBr(g.currentLoopPost)
 
+		return nil
+	case *ast.ImportStmt:
+		// Import statements are handled during module loading, nothing to generate
+		return nil
+	case *ast.ImportBlock:
+		// Import blocks are handled during module loading, nothing to generate
 		return nil
 	default:
 		return fmt.Errorf("unsupported statement type: %T", stmt)
@@ -291,6 +386,8 @@ func (g *CodeGen) generateCall(expr *ast.CallExpr) (llvm.Value, error) {
 		return llvm.Value{}, fmt.Errorf("function calls only support identifiers for now")
 	}
 
+	funcName := ident.Name
+
 	// Generate arguments
 	args := []llvm.Value{}
 
@@ -303,20 +400,55 @@ func (g *CodeGen) generateCall(expr *ast.CallExpr) (llvm.Value, error) {
 		args = append(args, val)
 	}
 
+	// Check if it's a qualified call: module.Function
+	if g.isQualifiedName(funcName) {
+		return g.generateQualifiedCall(funcName, args)
+	}
+
 	// Check if it's a runtime built-in function
-	runtimeFuncName := "yar_" + ident.Name
+	runtimeFuncName := "yar_" + funcName
 	if fn, ok := g.runtimeFuncs[runtimeFuncName]; ok {
 		fnType := g.runtimeFuncTypes[runtimeFuncName]
 		return g.builder.CreateCall(fnType, fn, args, ""), nil
 	}
 
 	// Check if it's a user-defined function
-	userFunc := g.module.NamedFunction(ident.Name)
+	userFunc := g.module.NamedFunction(funcName)
 	if userFunc.IsNil() {
-		return llvm.Value{}, fmt.Errorf("undefined function: %s", ident.Name)
+		return llvm.Value{}, fmt.Errorf("undefined function: %s", funcName)
 	}
 
 	return g.builder.CreateCall(userFunc.GlobalValueType(), userFunc, args, ""), nil
+}
+
+func (g *CodeGen) isQualifiedName(name string) bool {
+	// Check if name contains a dot (e.g., "math.Sqrt")
+	for i := 0; i < len(name); i++ {
+		if name[i] == '.' {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (g *CodeGen) generateQualifiedCall(qualifiedName string, args []llvm.Value) (llvm.Value, error) {
+	ext, ok := g.externalFunctions[qualifiedName]
+	if !ok {
+		return llvm.Value{}, fmt.Errorf("external function %q not registered", qualifiedName)
+	}
+
+	// Mangle name: math.Sqrt -> math_Sqrt
+	mangledName := ext.ModuleName + "_" + ext.FuncName
+
+	// Get or create function
+	fn := g.module.NamedFunction(mangledName)
+	if fn.IsNil() {
+		return llvm.Value{}, fmt.Errorf("external function %q not found", mangledName)
+	}
+
+	// Create call
+	return g.builder.CreateCall(fn.GlobalValueType(), fn, args, ""), nil
 }
 
 func (g *CodeGen) generateAssign(stmt *ast.AssignStmt) error {
@@ -555,7 +687,14 @@ func (g *CodeGen) generateFuncDecl(stmt *ast.FuncDecl) error {
 	}
 
 	funcType := llvm.FunctionType(valuePtr, paramTypes, false)
-	function := llvm.AddFunction(g.module, stmt.Name, funcType)
+
+	// Mangle exported function names with module prefix
+	funcName := stmt.Name
+	if g.moduleName != "" && g.moduleName != "main" && len(stmt.Name) > 0 && stmt.Name[0] >= 'A' && stmt.Name[0] <= 'Z' {
+		funcName = g.moduleName + "_" + stmt.Name
+	}
+
+	function := llvm.AddFunction(g.module, funcName, funcType)
 
 	// Create entry block
 	entry := g.context.AddBasicBlock(function, "entry")

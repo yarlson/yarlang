@@ -9,9 +9,11 @@ import (
 
 func TestCodegenIfStmt(t *testing.T) {
 	input := `
-x = 10
-if x > 5 {
-	println(x)
+func main() {
+	x = 10
+	if x > 5 {
+		println(x)
+	}
 }
 `
 
@@ -45,11 +47,13 @@ func contains(s, substr string) bool {
 
 func TestCodegenIfElseStmt(t *testing.T) {
 	input := `
-x = 3
-if x > 5 {
-	println(10)
-} else {
-	println(20)
+func main() {
+	x = 3
+	if x > 5 {
+		println(10)
+	} else {
+		println(20)
+	}
 }
 `
 
@@ -77,13 +81,15 @@ if x > 5 {
 
 func TestCodegenIfElseIfStmt(t *testing.T) {
 	input := `
-x = 7
-if x > 10 {
-	println(10)
-} else if x > 5 {
-	println(20)
-} else {
-	println(30)
+func main() {
+	x = 7
+	if x > 10 {
+		println(10)
+	} else if x > 5 {
+		println(20)
+	} else {
+		println(30)
+	}
 }
 `
 
@@ -114,11 +120,13 @@ if x > 10 {
 
 func TestCodegenForLoop(t *testing.T) {
 	input := `
-sum = 0
-for i = 0; i < 5; i = i + 1 {
-	sum = sum + i
+func main() {
+	sum = 0
+	for i = 0; i < 5; i = i + 1 {
+		sum = sum + i
+	}
+	println(sum)
 }
-println(sum)
 `
 
 	l := lexer.New(input)
@@ -145,11 +153,13 @@ println(sum)
 
 func TestCodegenBreak(t *testing.T) {
 	input := `
-for i = 0; i < 10; i = i + 1 {
-	if i > 3 {
-		break
+func main() {
+	for i = 0; i < 10; i = i + 1 {
+		if i > 3 {
+			break
+		}
+		println(i)
 	}
-	println(i)
 }
 `
 
