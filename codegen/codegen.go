@@ -1,768 +1,439 @@
 package codegen
 
 import (
-	"fmt"
-	"os"
-
-	"github.com/yarlson/yarlang/ast"
-	"tinygo.org/x/go-llvm"
+	"github.com/llir/llvm/ir"
+	"github.com/llir/llvm/ir/constant"
+	"github.com/llir/llvm/ir/enum"
+	"github.com/llir/llvm/ir/types"
+	"github.com/llir/llvm/ir/value"
+	"github.com/yarlson/yarlang/mir"
 )
 
-type CodeGen struct {
-	module  llvm.Module
-	builder llvm.Builder
-	context llvm.Context
-
-	// Runtime function declarations
-	runtimeFuncs map[string]llvm.Value
-	// Runtime function types (cached to avoid GlobalValueType() issues)
-	runtimeFuncTypes map[string]llvm.Type
-
-	// Variable storage (maps variable name to LLVM value)
-	variables map[string]llvm.Value
-	// Variable types (cached to avoid Type().ElementType() issues)
-	variableTypes map[string]llvm.Type
-
-	// Current function being generated
-	currentFunc llvm.Value
-
-	// Loop tracking for break/continue
-	currentLoopExit llvm.BasicBlock // For break
-	currentLoopPost llvm.BasicBlock // For continue
-
-	// Module system support
-	moduleName        string
-	externalFunctions map[string]*ExternalFunc // Qualified name -> function info
+// Codegen generates LLVM IR from MIR
+type Codegen struct {
+	mod       *ir.Module
+	currentFn *ir.Func
+	locals    map[string]*ir.InstAlloca
+	values    map[string]value.Value // Track all SSA values
+	blocks    map[string]*ir.Block   // Map from label to LLVM block
+	globals   map[string]*ir.Global  // Map from global name to LLVM global
 }
 
-type ExternalFunc struct {
-	ModuleName string
-	FuncName   string
-	ParamCount int
-}
-
-func New() *CodeGen {
-	context := llvm.GlobalContext()
-	module := context.NewModule("yarlang")
-	builder := context.NewBuilder()
-
-	gen := &CodeGen{
-		module:            module,
-		builder:           builder,
-		context:           context,
-		runtimeFuncs:      make(map[string]llvm.Value),
-		runtimeFuncTypes:  make(map[string]llvm.Type),
-		variables:         make(map[string]llvm.Value),
-		variableTypes:     make(map[string]llvm.Type),
-		externalFunctions: make(map[string]*ExternalFunc),
-	}
-
-	gen.declareRuntimeFunctions()
-
-	return gen
-}
-
-func (g *CodeGen) declareRuntimeFunctions() {
-	// Declare runtime types
-	valueType := g.context.StructType([]llvm.Type{
-		g.context.Int8Type(),                      // type tag
-		llvm.PointerType(g.context.Int8Type(), 0), // data pointer
-	}, false)
-
-	valuePtr := llvm.PointerType(valueType, 0)
-
-	// Helper to declare a function and cache its type
-	addFunc := func(name string, retType llvm.Type, paramTypes []llvm.Type) {
-		fnType := llvm.FunctionType(retType, paramTypes, false)
-		g.runtimeFuncTypes[name] = fnType
-		g.runtimeFuncs[name] = llvm.AddFunction(g.module, name, fnType)
-	}
-
-	// Declare runtime functions
-	addFunc("yar_number", valuePtr, []llvm.Type{g.context.DoubleType()})
-	addFunc("yar_string", valuePtr, []llvm.Type{llvm.PointerType(g.context.Int8Type(), 0)})
-	addFunc("yar_bool", valuePtr, []llvm.Type{g.context.Int1Type()})
-	addFunc("yar_nil", valuePtr, []llvm.Type{})
-	addFunc("yar_add", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_subtract", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_multiply", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_divide", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_modulo", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_eq", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_neq", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_lt", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_gt", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_lte", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_gte", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_and", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_or", valuePtr, []llvm.Type{valuePtr, valuePtr})
-	addFunc("yar_not", valuePtr, []llvm.Type{valuePtr})
-	addFunc("yar_negate", valuePtr, []llvm.Type{valuePtr})
-	addFunc("yar_print", g.context.VoidType(), []llvm.Type{valuePtr})
-	addFunc("yar_println", g.context.VoidType(), []llvm.Type{valuePtr})
-	addFunc("yar_len", valuePtr, []llvm.Type{valuePtr})
-	addFunc("yar_type", valuePtr, []llvm.Type{valuePtr})
-	addFunc("yar_is_truthy", g.context.Int1Type(), []llvm.Type{valuePtr})
-}
-
-func (g *CodeGen) SetModuleName(name string) {
-	g.moduleName = name
-}
-
-func (g *CodeGen) RegisterExternalFunction(moduleName, funcName string, paramCount int) {
-	qualified := moduleName + "." + funcName
-	g.externalFunctions[qualified] = &ExternalFunc{
-		ModuleName: moduleName,
-		FuncName:   funcName,
-		ParamCount: paramCount,
+func NewCodegen() *Codegen {
+	return &Codegen{
+		mod:     ir.NewModule(),
+		locals:  make(map[string]*ir.InstAlloca),
+		values:  make(map[string]value.Value),
+		blocks:  make(map[string]*ir.Block),
+		globals: make(map[string]*ir.Global),
 	}
 }
 
-func (g *CodeGen) generateExternalDeclarations() {
-	// Get the Value* type
-	valueType := g.context.StructType([]llvm.Type{
-		g.context.Int8Type(),
-		llvm.PointerType(g.context.Int8Type(), 0),
-	}, false)
-	valuePtr := llvm.PointerType(valueType, 0)
+func (cg *Codegen) GenModule(mirMod *mir.Module) *ir.Module {
+	// Generate global constants first
+	for _, global := range mirMod.Globals {
+		cg.genGlobal(global)
+	}
 
-	for _, ext := range g.externalFunctions {
-		// Generate: declare %Value* @module_Function(%Value*, ...)
-		mangledName := ext.ModuleName + "_" + ext.FuncName
+	// Then generate functions
+	for _, fn := range mirMod.Functions {
+		cg.genFunction(fn)
+	}
 
-		params := make([]llvm.Type, ext.ParamCount)
-		for i := 0; i < ext.ParamCount; i++ {
-			params[i] = valuePtr
-		}
+	return cg.mod
+}
 
-		fnType := llvm.FunctionType(valuePtr, params, false)
-		llvm.AddFunction(g.module, mangledName, fnType)
+func (cg *Codegen) genGlobal(global mir.Global) {
+	switch g := global.(type) {
+	case *mir.GlobalString:
+		// Create a global string constant
+		// String content + null terminator
+		content := g.Value + "\x00"
+
+		// Create the constant string
+		strConst := constant.NewCharArrayFromString(content)
+
+		// Create global variable
+		global := cg.mod.NewGlobalDef(g.Name, strConst)
+		global.Linkage = enum.LinkagePrivate
+		global.UnnamedAddr = enum.UnnamedAddrUnnamedAddr
+
+		// Store in globals map
+		cg.globals[g.Name] = global
+
+		// Also store in values map for easy lookup
+		cg.values[g.Name] = global
 	}
 }
 
-func (g *CodeGen) Generate(program *ast.Program) error {
-	// Generate external declarations first
-	g.generateExternalDeclarations()
+func (cg *Codegen) genFunction(mirFn *mir.Function) {
+	// Convert MIR types to LLVM types
+	params := make([]*ir.Param, len(mirFn.Params))
+	for i, p := range mirFn.Params {
+		params[i] = ir.NewParam(p.Name, cg.toLLVMType(p.Type))
+		// Track function parameters as values
+		cg.values[p.Name] = params[i]
+	}
 
-	// Check if this module has a main() function
-	var mainFuncDecl *ast.FuncDecl
+	retTy := cg.toLLVMType(mirFn.RetTy)
+	fn := cg.mod.NewFunc(mirFn.Name, retTy, params...)
+	cg.currentFn = fn
 
-	for _, stmt := range program.Statements {
-		if funcDecl, ok := stmt.(*ast.FuncDecl); ok && funcDecl.Name == "main" {
-			mainFuncDecl = funcDecl
-			break
+	// Create all LLVM blocks first (so we can reference them in branches)
+	for _, bb := range mirFn.Blocks {
+		llvmBlock := fn.NewBlock(bb.Label)
+		cg.blocks[bb.Label] = llvmBlock
+	}
+
+	// Materialize parameters on the stack when MIR expects loads/stores by name
+	if len(mirFn.Blocks) > 0 && len(mirFn.Params) > 0 {
+		entryBlock := cg.blocks[mirFn.Blocks[0].Label]
+		for _, param := range mirFn.Params {
+			llvmTy := cg.toLLVMType(param.Type)
+			alloca := entryBlock.NewAlloca(llvmTy)
+			alloca.SetName(param.Name + ".addr")
+			entryBlock.NewStore(cg.values[param.Name], alloca)
+			cg.locals[param.Name] = alloca
 		}
 	}
 
-	// Generate all function declarations first
-	for _, stmt := range program.Statements {
-		if funcDecl, ok := stmt.(*ast.FuncDecl); ok {
-			// For the entry point module, rename main() to yar_main to avoid conflict
-			if funcDecl.Name == "main" {
-				// Create a copy with renamed function
-				renamedDecl := *funcDecl
+	// Generate instructions for each block
+	for _, bb := range mirFn.Blocks {
+		llvmBlock := cg.blocks[bb.Label]
+		cg.genBasicBlock(bb, llvmBlock)
+	}
 
-				renamedDecl.Name = "yar_main"
-				if err := g.generateFuncDecl(&renamedDecl); err != nil {
-					return err
-				}
+	cg.currentFn = nil
+	cg.locals = make(map[string]*ir.InstAlloca)
+	cg.values = make(map[string]value.Value)
+	cg.blocks = make(map[string]*ir.Block)
+}
+
+func (cg *Codegen) genBasicBlock(mirBB *mir.BasicBlock, llvmBB *ir.Block) {
+	for _, instr := range mirBB.Instrs {
+		switch i := instr.(type) {
+		case *mir.Alloca:
+			alloca := llvmBB.NewAlloca(cg.toLLVMType(i.Type))
+			alloca.SetName(i.Name)
+			cg.locals[i.Name] = alloca
+			cg.values[i.Name] = alloca
+		case *mir.Load:
+			src := cg.locals[i.Source]
+			load := llvmBB.NewLoad(cg.toLLVMType(i.Type), src)
+			load.SetName(i.Dest)
+			cg.values[i.Dest] = load
+		case *mir.Store:
+			// Get the value to store
+			val := cg.getValue(i.Value, i.Type, llvmBB)
+			dest := cg.locals[i.Dest]
+			llvmBB.NewStore(val, dest)
+		case *mir.BinOp:
+			// Get operands
+			left := cg.getValue(i.Left, i.Type, llvmBB)
+			right := cg.getValue(i.Right, i.Type, llvmBB)
+
+			var result value.Value
+			// Handle comparison operations (return i1/bool)
+			if i.Op >= mir.Eq && i.Op <= mir.Ge {
+				result = llvmBB.NewICmp(cg.opToICmpPred(i.Op), left, right)
 			} else {
-				if err := g.generateFuncDecl(funcDecl); err != nil {
-					return err
+				// Handle arithmetic operations
+				switch i.Op {
+				case mir.Add:
+					result = llvmBB.NewAdd(left, right)
+				case mir.Sub:
+					result = llvmBB.NewSub(left, right)
+				case mir.Mul:
+					result = llvmBB.NewMul(left, right)
+				case mir.Div:
+					result = llvmBB.NewSDiv(left, right)
+				case mir.Mod:
+					result = llvmBB.NewSRem(left, right)
+				case mir.And:
+					result = llvmBB.NewAnd(left, right)
+				case mir.Or:
+					result = llvmBB.NewOr(left, right)
+				case mir.Xor:
+					result = llvmBB.NewXor(left, right)
+				case mir.Shl:
+					result = llvmBB.NewShl(left, right)
+				case mir.Shr:
+					result = llvmBB.NewAShr(left, right)
 				}
 			}
-		}
-	}
+			if result != nil {
+				result.(interface{ SetName(string) }).SetName(i.Dest)
+				cg.values[i.Dest] = result
+			}
+		case *mir.Call:
+			args, argTypes := cg.buildCallArgs(i, llvmBB)
+			if cg.genBuiltinCall(i, llvmBB, args) {
+				continue
+			}
 
-	// For entry point modules, create LLVM main that calls yar_main and execute top-level statements
-	if mainFuncDecl != nil {
-		mainType := llvm.FunctionType(g.context.Int32Type(), []llvm.Type{}, false)
-		mainFunc := llvm.AddFunction(g.module, "main", mainType)
-		entry := g.context.AddBasicBlock(mainFunc, "entry")
-		g.builder.SetInsertPointAtEnd(entry)
+			callee := cg.getFunctionByName(i.Callee)
 
-		// Generate top-level statements (assignments, expressions, etc.) before calling main
-		for _, stmt := range program.Statements {
-			if _, ok := stmt.(*ast.FuncDecl); !ok {
-				if err := g.generateStmt(stmt); err != nil {
-					return err
+			// If function not found, create external declaration using inferred arg types
+			if callee == nil {
+				retTy := cg.toLLVMType(i.RetTy)
+				params := make([]*ir.Param, len(argTypes))
+				for idx, argTy := range argTypes {
+					params[idx] = ir.NewParam("", argTy)
+				}
+				callee = cg.mod.NewFunc(i.Callee, retTy, params...)
+			}
+
+			call := llvmBB.NewCall(callee, args...)
+
+			if i.Dest != "" {
+				call.SetName(i.Dest)
+				cg.values[i.Dest] = call
+			}
+		case *mir.Br:
+			// Unconditional branch
+			targetBlock := cg.blocks[i.Label]
+			llvmBB.NewBr(targetBlock)
+		case *mir.CondBr:
+			// Conditional branch
+			cond := cg.getValue(i.Cond, &mir.PrimitiveType{Name: "bool"}, llvmBB)
+			trueBlock := cg.blocks[i.TrueLabel]
+			falseBlock := cg.blocks[i.FalseLabel]
+			llvmBB.NewCondBr(cond, trueBlock, falseBlock)
+		case *mir.Ret:
+			if i.Value == "" {
+				llvmBB.NewRet(nil)
+			} else {
+				// Check if it's a tracked value (from Load, etc.)
+				if val, ok := cg.values[i.Value]; ok {
+					llvmBB.NewRet(val)
+				} else {
+					// Otherwise, try to load from local
+					if alloca, ok := cg.locals[i.Value]; ok {
+						val := llvmBB.NewLoad(cg.toLLVMType(i.Type), alloca)
+						llvmBB.NewRet(val)
+					} else {
+						// Must be a constant
+						val := cg.parseConstant(i.Value, i.Type)
+						llvmBB.NewRet(val)
+					}
 				}
 			}
+		case *mir.DeferPush:
+			// TODO: proper defer runtime support needed
+			// For v0.4, simplified implementation - defer is not yet fully functional
+			// This would need a defer stack and runtime support
+			// For now, generate a comment as a placeholder
+		case *mir.DeferRunAll:
+			// TODO: proper defer runtime support needed
+			// For v0.4, simplified implementation - defer is not yet fully functional
+			// This would need to iterate the defer stack in LIFO order
+			// For now, generate a comment as a placeholder
 		}
-
-		// Call yar_main()
-		yarMainFunc := g.module.NamedFunction("yar_main")
-		if !yarMainFunc.IsNil() {
-			yarMainFuncType := yarMainFunc.GlobalValueType()
-			g.builder.CreateCall(yarMainFuncType, yarMainFunc, []llvm.Value{}, "")
-		}
-
-		// Return 0
-		g.builder.CreateRet(llvm.ConstInt(g.context.Int32Type(), 0, false))
 	}
-	// Note: Library modules (without main) don't execute top-level statements
+}
 
+func (cg *Codegen) buildCallArgs(call *mir.Call, block *ir.Block) ([]value.Value, []types.Type) {
+	args := make([]value.Value, len(call.Args))
+	argTypes := make([]types.Type, len(call.Args))
+	for idx, arg := range call.Args {
+		val := cg.getValue(arg, &mir.PrimitiveType{Name: "i32"}, block)
+		args[idx] = val
+		argTypes[idx] = val.Type()
+	}
+	return args, argTypes
+}
+
+func (cg *Codegen) genBuiltinCall(call *mir.Call, block *ir.Block, args []value.Value) bool {
+	switch call.Callee {
+	case "println":
+		return cg.lowerPrintln(block, args)
+	default:
+		return false
+	}
+}
+
+func (cg *Codegen) lowerPrintln(block *ir.Block, args []value.Value) bool {
+	if len(args) != 1 {
+		return false
+	}
+
+	arg := args[0]
+	switch t := arg.Type().(type) {
+	case *types.PointerType:
+		if !isI8Pointer(t) {
+			return false
+		}
+		fn := cg.getOrCreateFunction("println", types.Void, []types.Type{t})
+		block.NewCall(fn, arg)
+		return true
+	case *types.IntType:
+		name := "println_i32"
+		if t.BitSize == 1 {
+			name = "println_bool"
+		}
+		fn := cg.getOrCreateFunction(name, types.Void, []types.Type{t})
+		block.NewCall(fn, arg)
+		return true
+	default:
+		return false
+	}
+}
+
+func (cg *Codegen) getFunctionByName(name string) *ir.Func {
+	for _, fn := range cg.mod.Funcs {
+		if fn.Name() == name {
+			return fn
+		}
+	}
 	return nil
 }
 
-func (g *CodeGen) generateStmt(stmt ast.Stmt) error {
-	switch s := stmt.(type) {
-	case *ast.ExprStmt:
-		_, err := g.generateExpr(s.Expr)
-		return err
-	case *ast.AssignStmt:
-		return g.generateAssign(s)
-	case *ast.ReturnStmt:
-		return g.generateReturn(s)
-	case *ast.IfStmt:
-		return g.generateIf(s)
-	case *ast.ForStmt:
-		return g.generateFor(s)
-	case *ast.BlockStmt:
-		return g.generateBlock(s)
-	case *ast.FuncDecl:
-		return g.generateFuncDecl(s)
-	case *ast.BreakStmt:
-		if g.currentLoopExit.IsNil() {
-			return fmt.Errorf("break statement outside loop")
-		}
-
-		g.builder.CreateBr(g.currentLoopExit)
-
-		return nil
-	case *ast.ContinueStmt:
-		if g.currentLoopPost.IsNil() {
-			return fmt.Errorf("continue statement outside loop")
-		}
-
-		g.builder.CreateBr(g.currentLoopPost)
-
-		return nil
-	case *ast.ImportStmt:
-		// Import statements are handled during module loading, nothing to generate
-		return nil
-	case *ast.ImportBlock:
-		// Import blocks are handled during module loading, nothing to generate
-		return nil
-	default:
-		return fmt.Errorf("unsupported statement type: %T", stmt)
+func (cg *Codegen) getOrCreateFunction(name string, retTy types.Type, paramTypes []types.Type) *ir.Func {
+	if fn := cg.getFunctionByName(name); fn != nil {
+		return fn
 	}
+	params := make([]*ir.Param, len(paramTypes))
+	for idx, ty := range paramTypes {
+		params[idx] = ir.NewParam("", ty)
+	}
+	return cg.mod.NewFunc(name, retTy, params...)
 }
 
-func (g *CodeGen) generateExpr(expr ast.Expr) (llvm.Value, error) {
-	switch e := expr.(type) {
-	case *ast.NumberLiteral:
-		// Create Value* via runtime
-		numVal := llvm.ConstFloat(g.context.DoubleType(), e.Value)
-		fn := g.runtimeFuncs["yar_number"]
-		fnType := g.runtimeFuncTypes["yar_number"]
-
-		return g.builder.CreateCall(fnType, fn, []llvm.Value{numVal}, ""), nil
-
-	case *ast.StringLiteral:
-		// Create global string constant
-		strVal := g.builder.CreateGlobalStringPtr(e.Value, "str")
-		fn := g.runtimeFuncs["yar_string"]
-		fnType := g.runtimeFuncTypes["yar_string"]
-
-		return g.builder.CreateCall(fnType, fn, []llvm.Value{strVal}, ""), nil
-
-	case *ast.BoolLiteral:
-		boolVal := llvm.ConstInt(g.context.Int1Type(), 0, false)
-		if e.Value {
-			boolVal = llvm.ConstInt(g.context.Int1Type(), 1, false)
-		}
-
-		fn := g.runtimeFuncs["yar_bool"]
-		fnType := g.runtimeFuncTypes["yar_bool"]
-
-		return g.builder.CreateCall(fnType, fn, []llvm.Value{boolVal}, ""), nil
-
-	case *ast.NilLiteral:
-		fn := g.runtimeFuncs["yar_nil"]
-		fnType := g.runtimeFuncTypes["yar_nil"]
-
-		return g.builder.CreateCall(fnType, fn, []llvm.Value{}, ""), nil
-
-	case *ast.Identifier:
-		if val, ok := g.variables[e.Name]; ok {
-			// Get the cached type
-			valType := g.variableTypes[e.Name]
-			return g.builder.CreateLoad(valType, val, e.Name), nil
-		}
-
-		return llvm.Value{}, fmt.Errorf("undefined variable: %s", e.Name)
-
-	case *ast.BinaryExpr:
-		return g.generateBinaryExpr(e)
-
-	case *ast.UnaryExpr:
-		return g.generateUnaryExpr(e)
-
-	case *ast.CallExpr:
-		return g.generateCall(e)
-
-	default:
-		return llvm.Value{}, fmt.Errorf("unsupported expression type: %T", expr)
-	}
-}
-
-func (g *CodeGen) generateBinaryExpr(expr *ast.BinaryExpr) (llvm.Value, error) {
-	left, err := g.generateExpr(expr.Left)
-	if err != nil {
-		return llvm.Value{}, err
-	}
-
-	right, err := g.generateExpr(expr.Right)
-	if err != nil {
-		return llvm.Value{}, err
-	}
-
-	var runtimeFunc string
-
-	switch expr.Operator {
-	case "+":
-		runtimeFunc = "yar_add"
-	case "-":
-		runtimeFunc = "yar_subtract"
-	case "*":
-		runtimeFunc = "yar_multiply"
-	case "/":
-		runtimeFunc = "yar_divide"
-	case "%":
-		runtimeFunc = "yar_modulo"
-	case "==":
-		runtimeFunc = "yar_eq"
-	case "!=":
-		runtimeFunc = "yar_neq"
-	case "<":
-		runtimeFunc = "yar_lt"
-	case ">":
-		runtimeFunc = "yar_gt"
-	case "<=":
-		runtimeFunc = "yar_lte"
-	case ">=":
-		runtimeFunc = "yar_gte"
-	case "&&":
-		runtimeFunc = "yar_and"
-	case "||":
-		runtimeFunc = "yar_or"
-	default:
-		return llvm.Value{}, fmt.Errorf("unsupported binary operator: %s", expr.Operator)
-	}
-
-	fn := g.runtimeFuncs[runtimeFunc]
-	fnType := g.runtimeFuncTypes[runtimeFunc]
-
-	return g.builder.CreateCall(fnType, fn, []llvm.Value{left, right}, ""), nil
-}
-
-func (g *CodeGen) generateUnaryExpr(expr *ast.UnaryExpr) (llvm.Value, error) {
-	right, err := g.generateExpr(expr.Right)
-	if err != nil {
-		return llvm.Value{}, err
-	}
-
-	var runtimeFunc string
-
-	switch expr.Operator {
-	case "!":
-		runtimeFunc = "yar_not"
-	case "-":
-		runtimeFunc = "yar_negate"
-	default:
-		return llvm.Value{}, fmt.Errorf("unsupported unary operator: %s", expr.Operator)
-	}
-
-	fn := g.runtimeFuncs[runtimeFunc]
-	fnType := g.runtimeFuncTypes[runtimeFunc]
-
-	return g.builder.CreateCall(fnType, fn, []llvm.Value{right}, ""), nil
-}
-
-func (g *CodeGen) generateCall(expr *ast.CallExpr) (llvm.Value, error) {
-	ident, ok := expr.Function.(*ast.Identifier)
+func isI8Pointer(ty types.Type) bool {
+	ptr, ok := ty.(*types.PointerType)
 	if !ok {
-		return llvm.Value{}, fmt.Errorf("function calls only support identifiers for now")
+		return false
 	}
-
-	funcName := ident.Name
-
-	// Generate arguments
-	args := []llvm.Value{}
-
-	for _, arg := range expr.Args {
-		val, err := g.generateExpr(arg)
-		if err != nil {
-			return llvm.Value{}, err
-		}
-
-		args = append(args, val)
+	if elem, ok := ptr.ElemType.(*types.IntType); ok {
+		return elem.BitSize == 8
 	}
-
-	// Check if it's a qualified call: module.Function
-	if g.isQualifiedName(funcName) {
-		return g.generateQualifiedCall(funcName, args)
-	}
-
-	// Check if it's a runtime built-in function
-	runtimeFuncName := "yar_" + funcName
-	if fn, ok := g.runtimeFuncs[runtimeFuncName]; ok {
-		fnType := g.runtimeFuncTypes[runtimeFuncName]
-		return g.builder.CreateCall(fnType, fn, args, ""), nil
-	}
-
-	// Check if it's a user-defined function
-	userFunc := g.module.NamedFunction(funcName)
-	if userFunc.IsNil() {
-		return llvm.Value{}, fmt.Errorf("undefined function: %s", funcName)
-	}
-
-	return g.builder.CreateCall(userFunc.GlobalValueType(), userFunc, args, ""), nil
-}
-
-func (g *CodeGen) isQualifiedName(name string) bool {
-	// Check if name contains a dot (e.g., "math.Sqrt")
-	for i := 0; i < len(name); i++ {
-		if name[i] == '.' {
-			return true
-		}
-	}
-
 	return false
 }
 
-func (g *CodeGen) generateQualifiedCall(qualifiedName string, args []llvm.Value) (llvm.Value, error) {
-	ext, ok := g.externalFunctions[qualifiedName]
-	if !ok {
-		return llvm.Value{}, fmt.Errorf("external function %q not registered", qualifiedName)
+// opToICmpPred converts MIR comparison operations to LLVM icmp predicates
+func (cg *Codegen) opToICmpPred(op mir.OpKind) enum.IPred {
+	switch op {
+	case mir.Eq:
+		return enum.IPredEQ
+	case mir.Ne:
+		return enum.IPredNE
+	case mir.Lt:
+		return enum.IPredSLT
+	case mir.Le:
+		return enum.IPredSLE
+	case mir.Gt:
+		return enum.IPredSGT
+	case mir.Ge:
+		return enum.IPredSGE
+	default:
+		return enum.IPredEQ
 	}
-
-	// Mangle name: math.Sqrt -> math_Sqrt
-	mangledName := ext.ModuleName + "_" + ext.FuncName
-
-	// Get or create function
-	fn := g.module.NamedFunction(mangledName)
-	if fn.IsNil() {
-		return llvm.Value{}, fmt.Errorf("external function %q not found", mangledName)
-	}
-
-	// Create call
-	return g.builder.CreateCall(fn.GlobalValueType(), fn, args, ""), nil
 }
 
-func (g *CodeGen) generateAssign(stmt *ast.AssignStmt) error {
-	// Simple case: single assignment
-	if len(stmt.Targets) != 1 || len(stmt.Values) != 1 {
-		return fmt.Errorf("multiple assignment not yet fully implemented")
-	}
+// getValue gets an LLVM value from a MIR value string
+// Handles both constants (like "42") and local variables (like "x")
+func (cg *Codegen) getValue(valueStr string, ty mir.Type, block *ir.Block) value.Value {
+	// Check if it's a global reference (starts with @)
+	if len(valueStr) > 0 && valueStr[0] == '@' {
+		globalName := valueStr[1:] // Remove @ prefix
+		if global, ok := cg.globals[globalName]; ok {
+			// For string constants, we need to get a pointer to the first element
+			// Use getelementptr to convert [N x i8]* to i8*
+			globalType := global.ContentType
+			if arrayType, ok := globalType.(*types.ArrayType); ok {
+				// Create indices for getelementptr: (i32 0, i32 0)
+				zero := constant.NewInt(types.I32, 0)
+				indices := []value.Value{zero, zero}
 
-	target := stmt.Targets[0]
-
-	value, err := g.generateExpr(stmt.Values[0])
-	if err != nil {
-		return err
-	}
-
-	// Allocate or get variable
-	var ptr llvm.Value
-	if existing, ok := g.variables[target]; ok {
-		ptr = existing
-	} else {
-		// Allocate new variable
-		valueType := value.Type()
-		ptr = g.builder.CreateAlloca(valueType, target)
-		g.variables[target] = ptr
-		g.variableTypes[target] = valueType
-	}
-
-	g.builder.CreateStore(value, ptr)
-
-	return nil
-}
-
-func (g *CodeGen) generateReturn(stmt *ast.ReturnStmt) error {
-	if len(stmt.Values) == 0 {
-		// Return nil
-		nilFn := g.runtimeFuncs["yar_nil"]
-		nilType := g.runtimeFuncTypes["yar_nil"]
-		nilValue := g.builder.CreateCall(nilType, nilFn, []llvm.Value{}, "")
-		g.builder.CreateRet(nilValue)
-
-		return nil
-	}
-
-	if len(stmt.Values) == 1 {
-		// Single return value
-		val, err := g.generateExpr(stmt.Values[0])
-		if err != nil {
-			return err
-		}
-
-		g.builder.CreateRet(val)
-
-		return nil
-	}
-
-	// Multiple return values - TODO: implement multi-value return
-	return fmt.Errorf("multiple return values not yet fully implemented")
-}
-
-func (g *CodeGen) generateIf(stmt *ast.IfStmt) error {
-	// Generate condition expression
-	condValue, err := g.generateExpr(stmt.Condition)
-	if err != nil {
-		return err
-	}
-
-	// Convert condition to boolean (check if truthy)
-	isTruthyFn := g.runtimeFuncs["yar_is_truthy"]
-	isTruthyType := g.runtimeFuncTypes["yar_is_truthy"]
-	boolValue := g.builder.CreateCall(isTruthyType, isTruthyFn, []llvm.Value{condValue}, "")
-
-	// Create basic blocks
-	thenBlock := g.context.AddBasicBlock(g.currentFunc, "then")
-
-	var elseBlock llvm.BasicBlock
-
-	mergeBlock := g.context.AddBasicBlock(g.currentFunc, "merge")
-
-	if stmt.ElseBlock != nil {
-		elseBlock = g.context.AddBasicBlock(g.currentFunc, "else")
-		g.builder.CreateCondBr(boolValue, thenBlock, elseBlock)
-	} else {
-		g.builder.CreateCondBr(boolValue, thenBlock, mergeBlock)
-	}
-
-	// Generate then block
-	g.builder.SetInsertPointAtEnd(thenBlock)
-
-	if err := g.generateBlock(stmt.ThenBlock); err != nil {
-		return err
-	}
-	// Only add branch if block doesn't end with return/break/continue
-	// Use GetInsertBlock() to get the current block after nested statements
-	currentBlock := g.builder.GetInsertBlock()
-	if !g.blockHasTerminator(currentBlock) {
-		g.builder.CreateBr(mergeBlock)
-	}
-
-	// Generate else block if it exists
-	if stmt.ElseBlock != nil {
-		g.builder.SetInsertPointAtEnd(elseBlock)
-
-		if err := g.generateBlock(stmt.ElseBlock); err != nil {
-			return err
-		}
-		// Use GetInsertBlock() to get the current block after nested statements
-		currentBlock := g.builder.GetInsertBlock()
-		if !g.blockHasTerminator(currentBlock) {
-			g.builder.CreateBr(mergeBlock)
+				// Get pointer to first element
+				gep := block.NewGetElementPtr(arrayType, global, indices...)
+				return gep
+			}
+			return global
 		}
 	}
 
-	// Continue in merge block
-	g.builder.SetInsertPointAtEnd(mergeBlock)
-
-	return nil
-}
-
-// Helper to check if block has a terminator
-func (g *CodeGen) blockHasTerminator(block llvm.BasicBlock) bool {
-	lastInst := block.LastInstruction()
-	if lastInst.IsNil() {
-		return false
+	// First check if it's an SSA value (from Load, BinOp, etc.)
+	if val, ok := cg.values[valueStr]; ok {
+		return val
 	}
-	// Check if the last instruction is a terminator (ret, br, switch, unreachable, etc.)
-	return !lastInst.IsAReturnInst().IsNil() ||
-		!lastInst.IsABranchInst().IsNil() ||
-		!lastInst.IsASwitchInst().IsNil() ||
-		!lastInst.IsAUnreachableInst().IsNil() ||
-		!lastInst.IsAInvokeInst().IsNil()
+
+	// Check if it's a local variable (alloca) that needs to be loaded
+	if alloca, ok := cg.locals[valueStr]; ok {
+		// Load from the local variable
+		return block.NewLoad(cg.toLLVMType(ty), alloca)
+	}
+
+	// Otherwise, treat it as a constant
+	return cg.parseConstant(valueStr, ty)
 }
 
-func (g *CodeGen) generateFor(stmt *ast.ForStmt) error {
-	// Create basic blocks
-	initBlock := g.context.AddBasicBlock(g.currentFunc, "for.init")
-	condBlock := g.context.AddBasicBlock(g.currentFunc, "for.cond")
-	bodyBlock := g.context.AddBasicBlock(g.currentFunc, "for.body")
-	postBlock := g.context.AddBasicBlock(g.currentFunc, "for.post")
-	endBlock := g.context.AddBasicBlock(g.currentFunc, "for.end")
+// parseConstant parses a constant value from a string
+func (cg *Codegen) parseConstant(value string, ty mir.Type) constant.Constant {
+	llvmType := cg.toLLVMType(ty)
 
-	// Save loop exit for break/continue
-	oldLoopExit := g.currentLoopExit
-	oldLoopPost := g.currentLoopPost
-	g.currentLoopExit = endBlock
-	g.currentLoopPost = postBlock
-
-	defer func() {
-		g.currentLoopExit = oldLoopExit
-		g.currentLoopPost = oldLoopPost
-	}()
-
-	// Generate init statement
-	if stmt.Init != nil {
-		g.builder.CreateBr(initBlock)
-		g.builder.SetInsertPointAtEnd(initBlock)
-
-		if err := g.generateStmt(stmt.Init); err != nil {
-			return err
+	// Parse integer constants
+	if intType, ok := llvmType.(*types.IntType); ok {
+		var intVal int64
+		// Simple parsing - in a real implementation, handle errors
+		if len(value) > 0 {
+			negative := false
+			str := value
+			if value[0] == '-' {
+				negative = true
+				str = value[1:]
+			}
+			for _, ch := range str {
+				if ch >= '0' && ch <= '9' {
+					intVal = intVal*10 + int64(ch-'0')
+				}
+			}
+			if negative {
+				intVal = -intVal
+			}
 		}
-
-		g.builder.CreateBr(condBlock)
-	} else {
-		g.builder.CreateBr(condBlock)
+		return constant.NewInt(intType, intVal)
 	}
 
-	// Generate condition
-	g.builder.SetInsertPointAtEnd(condBlock)
-
-	if stmt.Condition != nil {
-		condValue, err := g.generateExpr(stmt.Condition)
-		if err != nil {
-			return err
-		}
-
-		// Convert to boolean
-		isTruthyFn := g.runtimeFuncs["yar_is_truthy"]
-		isTruthyType := g.runtimeFuncTypes["yar_is_truthy"]
-		boolValue := g.builder.CreateCall(isTruthyType, isTruthyFn, []llvm.Value{condValue}, "")
-
-		g.builder.CreateCondBr(boolValue, bodyBlock, endBlock)
-	} else {
-		// Infinite loop (for { })
-		g.builder.CreateBr(bodyBlock)
-	}
-
-	// Generate body
-	g.builder.SetInsertPointAtEnd(bodyBlock)
-
-	if err := g.generateBlock(stmt.Body); err != nil {
-		return err
-	}
-	// Use GetInsertBlock() to get the current block after nested statements
-	currentBlock := g.builder.GetInsertBlock()
-	if !g.blockHasTerminator(currentBlock) {
-		g.builder.CreateBr(postBlock)
-	}
-
-	// Generate post statement
-	g.builder.SetInsertPointAtEnd(postBlock)
-
-	if stmt.Post != nil {
-		if err := g.generateStmt(stmt.Post); err != nil {
-			return err
-		}
-	}
-
-	g.builder.CreateBr(condBlock)
-
-	// Continue after loop
-	g.builder.SetInsertPointAtEnd(endBlock)
-
-	return nil
+	// Default to zero for unhandled types
+	return constant.NewInt(types.I32, 0)
 }
 
-func (g *CodeGen) generateBlock(stmt *ast.BlockStmt) error {
-	for _, s := range stmt.Statements {
-		if err := g.generateStmt(s); err != nil {
-			return err
+func (cg *Codegen) toLLVMType(mirType mir.Type) types.Type {
+	switch t := mirType.(type) {
+	case *mir.PrimitiveType:
+		switch t.Name {
+		case "i8":
+			return types.I8
+		case "i16":
+			return types.I16
+		case "i32":
+			return types.I32
+		case "i64":
+			return types.I64
+		case "u8":
+			return types.I8
+		case "u16":
+			return types.I16
+		case "u32":
+			return types.I32
+		case "u64":
+			return types.I64
+		case "f32":
+			return types.Float
+		case "f64":
+			return types.Double
+		case "bool":
+			return types.I1
+		case "void":
+			return types.Void
+		default:
+			return types.I32
 		}
+	case *mir.PtrType:
+		elem := cg.toLLVMType(t.Elem)
+		return types.NewPointer(elem)
+	default:
+		return types.I32
 	}
-
-	return nil
-}
-
-func (g *CodeGen) generateFuncDecl(stmt *ast.FuncDecl) error {
-	// Create function type: Value* func(Value*, Value*, ...)
-	valueType := g.context.StructType([]llvm.Type{
-		g.context.Int8Type(),
-		llvm.PointerType(g.context.Int8Type(), 0),
-	}, false)
-	valuePtr := llvm.PointerType(valueType, 0)
-
-	paramTypes := make([]llvm.Type, len(stmt.Params))
-	for i := range paramTypes {
-		paramTypes[i] = valuePtr
-	}
-
-	funcType := llvm.FunctionType(valuePtr, paramTypes, false)
-
-	// Mangle exported function names with module prefix
-	funcName := stmt.Name
-	if g.moduleName != "" && g.moduleName != "main" && len(stmt.Name) > 0 && stmt.Name[0] >= 'A' && stmt.Name[0] <= 'Z' {
-		funcName = g.moduleName + "_" + stmt.Name
-	}
-
-	function := llvm.AddFunction(g.module, funcName, funcType)
-
-	// Create entry block
-	entry := g.context.AddBasicBlock(function, "entry")
-	g.builder.SetInsertPointAtEnd(entry)
-
-	// Save old function context
-	oldFunc := g.currentFunc
-	oldVars := g.variables
-	oldVarTypes := g.variableTypes
-	g.currentFunc = function
-	g.variables = make(map[string]llvm.Value)
-	g.variableTypes = make(map[string]llvm.Type)
-
-	// Allocate space for parameters
-	for i, param := range stmt.Params {
-		paramValue := function.Param(i)
-		ptr := g.builder.CreateAlloca(valuePtr, param)
-		g.builder.CreateStore(paramValue, ptr)
-		g.variables[param] = ptr
-		g.variableTypes[param] = valuePtr
-	}
-
-	// Generate function body
-	if err := g.generateBlock(stmt.Body); err != nil {
-		return err
-	}
-
-	// If no explicit return, return nil
-	currentBlock := g.builder.GetInsertBlock()
-	if !g.blockHasTerminator(currentBlock) {
-		nilFn := g.runtimeFuncs["yar_nil"]
-		nilType := g.runtimeFuncTypes["yar_nil"]
-		nilValue := g.builder.CreateCall(nilType, nilFn, []llvm.Value{}, "")
-		g.builder.CreateRet(nilValue)
-	}
-
-	// Restore context
-	g.currentFunc = oldFunc
-	g.variables = oldVars
-	g.variableTypes = oldVarTypes
-
-	// Switch back to main function
-	if !oldFunc.IsNil() {
-		// Find the last basic block and continue there
-		lastBlock := oldFunc.LastBasicBlock()
-		g.builder.SetInsertPointAtEnd(lastBlock)
-	}
-
-	return nil
-}
-
-func (g *CodeGen) EmitIR() string {
-	return g.module.String()
-}
-
-func (g *CodeGen) WriteToFile(filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		if err := file.Close(); err != nil {
-			// Log the error but don't override the return value
-			// since WriteBitcodeToFile error is more important
-			_ = err
-		}
-	}()
-
-	return llvm.WriteBitcodeToFile(g.module, file)
 }

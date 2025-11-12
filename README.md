@@ -1,465 +1,476 @@
-# YarLang
+# YarLang v0.1.0
 
-A dynamically-typed scripting language with Go-inspired syntax that compiles to native code via LLVM.
+A statically-typed systems programming language with ownership and borrowing, combining Go's clean syntax with Rust's memory safety guarantees.
 
-YarLang is a modern scripting language that combines the simplicity of dynamic typing with the performance of ahead-of-time compilation. It features Go-like syntax, automatic memory management via the Boehm garbage collector, and compiles directly to native executables through LLVM.
+> New to YarLang? Start with the hands-on [GUIDE.md](GUIDE.md) for a step-by-step walkthrough from installation to building small programs.
+
+## Design Philosophy
+
+**"Go-look, Rust-core"** - Simple, familiar surface syntax with real ownership semantics, move-by-default, and compile-time memory safety without garbage collection.
 
 ## Features
 
-**Core Language Features:**
+### Type System
 
-- Dynamic typing with runtime type checking
-- First-class functions with support for recursion
-- Lexical scoping with Python-style variable semantics
-- Automatic memory management (Boehm GC)
+- **Static typing** with Hindley-Milner type inference
+- **Ownership and borrowing** - values move by default, compile-time borrow checking
+- **Primitives**: `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`, `f32`, `f64`, `bool`, `char`, `void`
+- **References**: `&T` (shared), `&mut T` (exclusive)
+- **Generics**: `Vec<T>`, `Result<T, E>`, `Option<T>`
+- **Arrays**: `[T; N]` (fixed size)
+- **Slices**: `[]T` (borrowed view)
+- **Tuples**: `(T1, T2, ...)`
 
-**Data Types:**
+### Language Features
 
-- Numbers (double-precision floating-point)
-- Strings
-- Booleans (true/false)
-- Nil
-- Functions
+- **Result<T,E>** - Explicit error handling with `?` operator for propagation
+- **Option<T>** - Null safety with Some/None variants
+- **defer** - RAII-style cleanup (LIFO execution on scope exit)
+- **Semicolons optional** - Automatic semicolon insertion (ASI)
+- **No garbage collection** - Compile-time memory management via ownership
 
-**Operators:**
+### Syntax Style
 
-- Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Logical: `&&`, `||`, `!`
-
-**Control Flow:**
-
-- If/else conditionals with else-if chains
-- For loops with break and continue statements
-
-**Functions:**
-
-- User-defined functions with parameters
-- Recursive function calls
-- Return statements with values
-- Multiple return values
-- Built-in functions: `print`, `println`, `len`, `type`
-
-## Module System
-
-YarLang supports splitting code across multiple files using Go-style imports.
-
-### Creating a Project
-
-```bash
-yar init
-```
-
-This creates a `yar.toml` file:
-
-```toml
-[package]
-name = "myproject"
-version = "0.1.0"
-entry = "main.yar"
-```
-
-### Importing Modules
-
-**Single import:**
-```go
-import "math"
-```
-
-**Import block:**
-```go
-import (
-    "math"
-    "strings" as str
-    "io"
-)
-```
-
-**Using imports:**
-```go
-import "math"
-
-func main() {
-    x := math.Sqrt(16)  // Qualified access
-    println(x)
-}
-```
-
-### Exports
-
-Functions with capital letters are exported:
-
-```go
-// math.yar
-func Sqrt(x) {     // Exported
-    return x
-}
-
-func internal() {  // Private
-    return 42
-}
-```
-
-### Building Projects
-
-```bash
-yar build   # Build project
-yar run     # Build and run
-yar clean   # Remove build artifacts
-yar check   # Check without building
-```
-
-### Module Resolution
-
-Import paths are resolved in this order:
-
-1. **Local files** - Current directory and parents up to `yar.toml`
-2. **Standard library** - `~/.yar/stdlib/`
-3. **Third-party** - `~/.yar/pkg/` (future)
-
-Use `std/` prefix to force stdlib: `import "std/math"`
-
-### Standard Library
-
-Initial stdlib modules:
-
-- `math` - Mathematical functions
-- `strings` - String utilities
-- `io` - Input/output
-- `os` - Operating system interface
-
-### Project Structure
-
-```
-myproject/
-  yar.toml         # Project manifest
-  main.yar         # Entry point
-  math.yar         # Local module
-  utils/           # Nested modules
-    strings.yar
-  build/           # Generated (gitignored)
-```
-
-## Prerequisites
-
-To build and run YarLang, you need:
-
-- **Go** (1.21 or later) - for building the compiler and LSP
-- **LLVM** (14.0 or later) - for code generation
-- **Boehm GC** - for garbage collection
-- **Clang** - for compiling LLVM IR to native code
-
-### Installing Prerequisites
-
-**macOS (using Homebrew):**
-
-```bash
-brew install go llvm bdw-gc
-```
-
-**Linux (Ubuntu/Debian):**
-
-```bash
-sudo apt-get install golang llvm-14 libgc-dev clang
-```
-
-**Linux (Fedora/RHEL):**
-
-```bash
-sudo dnf install golang llvm gc-devel clang
-```
-
-## Building YarLang
-
-1. Clone or download this repository
-2. Build the runtime library:
-
-```bash
-cd runtime
-make
-cd ..
-```
-
-3. Build the compiler and LSP server:
-
-```bash
-# Build the YarLang compiler
-go build -o yar ./cmd/yarlang
-
-# Build the LSP server
-go build -o yarlang-lsp ./cmd/yarlang-lsp
-```
-
-This creates `yar` and `yarlang-lsp` executables in the current directory.
+- **Go-style function parameters**: `fn add(a i32, b i32) i32`
+- **Rust-style bindings**: `let x: i32 = 5`, `let mut y = 10`
+- **Short declarations**: `x := 42` (type inferred, immutable)
 
 ## Quick Start
 
-Create a file called `hello.yar`:
+### Hello World
 
-```yar
-// My first YarLang program
-name = "World"
-println("Hello, " + name + "!")
+Create `hello.yar`:
 
-// Calculate and print some numbers
-for i = 1; i <= 5; i = i + 1 {
-    println(i * i)
+```
+fn main() {
+    println("Hello, YarLang!")
 }
 ```
 
-Compile and run it:
+Build and run:
 
 ```bash
-./yar hello.yar
+./yar build hello.yar
 ./hello
 ```
 
-The compiler will generate `hello.ll` (LLVM IR) and `hello` (native executable).
+Output:
+
+```
+Hello, YarLang!
+```
+
+### More Examples
+
+**Fibonacci:**
+
+```
+fn fib(n i32) i32 {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    let result: i32 = fib(10)
+    println("fib(10) = ")
+    println(result)
+}
+```
+
+**Ownership and Borrowing:**
+
+```
+fn main() {
+    let x: i32 = 42
+    let y: i32 = x        // Error: x moved to y
+
+    let a: i32 = 10
+    let b: &i32 = &a      // OK: borrow a
+    let c: i32 = a        // Error: a is borrowed
+}
+```
+
+**Error Handling:**
+
+```
+fn divide(a i32, b i32) Result<i32, []u8> {
+    if b == 0 {
+        return Err("division by zero")
+    }
+    return Ok(a / b)
+}
+
+fn main() {
+    let result := divide(10, 2)?  // Propagates error or unwraps
+    println("Result: 5")
+}
+```
+
+## Installation
+
+### Prerequisites
+
+- **Go** 1.21+ (for building the compiler)
+- **LLVM** 14.0+ (for code generation)
+- **Clang** (for linking LLVM IR to native code)
+
+### Installing Dependencies
+
+**macOS:**
+
+```bash
+brew install go llvm
+```
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt-get install golang llvm-14 clang
+```
+
+**Fedora/RHEL:**
+
+```bash
+sudo dnf install golang llvm clang
+```
+
+### Building YarLang
+
+```bash
+# Clone the repository
+git clone https://github.com/yarlson/yarlang.git
+cd yarlang
+
+# Build the compiler
+cd cmd/yar
+go build -o ../../yar
+cd ../..
+```
+
+This creates the `yar` executable in the project root.
 
 ## Usage
 
 ```bash
-# Compile a YarLang program
-./yar <source-file.yar>
+# Type check a program
+./yar check <file.yar>
 
-# Start the LSP server (for editor integration)
-./yarlang-lsp
+# Build an executable
+./yar build <file.yar>
+
+# Build and run
+./yar run <file.yar>
 ```
 
-The compiler will:
+## Language Guide
 
-1. Lex and parse the source file
-2. Perform semantic analysis
-3. Generate LLVM IR (saved as `<source-file>.ll`)
-4. Compile to a native executable (saved as `<source-file>`)
+### Variables and Types
 
-Then you can run the generated executable:
+```
+// Immutable by default
+let x: i32 = 42
+let y := 100          // Type inferred
 
-```bash
-./<source-file>
+// Mutable variables
+let mut counter: i32 = 0
+counter = counter + 1
+
+// Short declaration (immutable)
+name := "YarLang"
 ```
 
-## Language Server Protocol (LSP)
+### Functions
 
-YarLang includes a full-featured LSP server that provides:
+```
+// Go-style syntax
+fn add(a i32, b i32) i32 {
+    return a + b
+}
 
-- **Real-time diagnostics** - Syntax and semantic error detection
-- **Code completion** - Context-aware suggestions for variables, functions, and keywords
-- **Hover information** - Type and signature information on hover
-- **Go-to-definition** - Navigate to symbol declarations
+// Void functions (no return type)
+fn greet(name []u8) {
+    println("Hello, " + name)
+}
 
-### Editor Integration
+// With generics (future)
+fn identity<T>(x T) T {
+    return x
+}
+```
 
-#### Zed Editor
+### Control Flow
 
-1. Install the LSP binary:
+```
+// If expressions
+if x > 0 {
+    println("positive")
+} else if x < 0 {
+    println("negative")
+} else {
+    println("zero")
+}
 
-   ```bash
-   sudo cp yarlang-lsp /usr/local/bin/
-   sudo chmod +x /usr/local/bin/yarlang-lsp
-   ```
+// While loops
+let mut i := 0
+while i < 10 {
+    println("tick")
+    i = i + 1
+}
 
-2. Copy the language configuration:
+// For loops (range-based)
+for i in 0..10 {
+    println("iteration")
+}
 
-   ```bash
-   mkdir -p ~/.config/zed/languages/yarlang
-   cp editors/zed/languages/yarlang/config.toml ~/.config/zed/languages/yarlang/
-   ```
+// Break and continue
+while true {
+    if condition {
+        break
+    }
+    if other {
+        continue
+    }
+}
+```
 
-3. Add to `~/.config/zed/settings.json`:
+### Structs and Enums
 
-   ```json
-   {
-     "lsp": {
-       "yarlang-lsp": {
-         "binary": {
-           "path": "/usr/local/bin/yarlang-lsp"
-         },
-         "settings": {}
-       }
-     },
-     "languages": {
-       "YarLang": {
-         "language_servers": ["yarlang-lsp"]
-       }
-     }
-   }
-   ```
+```
+// Struct definition
+struct Point {
+    x: f64,
+    y: f64,
+}
 
-4. Restart Zed and open a `.yar` file
+// Enum definition
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
 
-See [`server/README.md`](server/README.md) for complete LSP documentation, troubleshooting, and support for other editors (VS Code, Neovim, Emacs, Sublime Text).
+// Implementation blocks
+impl Point {
+    fn len(&self) f64 {
+        return (self.x * self.x + self.y * self.y).sqrt()
+    }
+}
+```
+
+### Error Handling
+
+```
+// Result type
+fn parse_int(s []u8) Result<i32, []u8> {
+    // ... implementation
+    return Ok(42)
+}
+
+// Using ? operator
+fn process() Result<i32, []u8> {
+    let value := parse_int("123")?  // Propagates error
+    return Ok(value * 2)
+}
+```
+
+### Ownership and Borrowing
+
+```
+// Move semantics (default)
+let x := vec![1, 2, 3]
+let y := x      // x moved to y, x is invalid
+
+// Borrowing (shared)
+let a := 42
+let b: &i32 = &a    // Borrow a
+
+// Mutable borrowing (exclusive)
+let mut x := 10
+let y: &mut i32 = &mut x
+*y = 20
+```
+
+### Defer
+
+```
+fn process_file(path []u8) Result<(), []u8> {
+    let f := File::open(path)?
+    defer f.close()  // Runs on scope exit (LIFO)
+
+    // Use file...
+    return Ok(())
+}
+```
+
+### Modules
+
+```
+// Declare module
+module myproject::utils
+
+// Import modules
+use std::io::File
+use core::fmt::println
+
+// Public items
+pub fn exported() {
+    // ...
+}
+
+fn private() {
+    // ...
+}
+```
 
 ## Project Structure
 
 ```
 yarlang/
-├── cmd/
-│   ├── yarlang/      # YarLang compiler binary
-│   └── yarlang-lsp/  # LSP server binary
-├── lexer/            # Tokenization and lexical analysis
-├── parser/           # Parser and AST construction
-├── ast/              # Abstract Syntax Tree definitions with position tracking
-├── semantic/         # Semantic analysis (type checking, etc.)
-├── analysis/         # LSP semantic analysis (symbols, scopes)
+├── cmd/yar/          # Compiler CLI
+├── lexer/            # Tokenization
+├── parser/           # Syntax analysis
+├── ast/              # Abstract syntax tree
+├── types/            # Type system
+├── checker/          # Type checking and borrow checking
+├── mir/              # Mid-level IR (SSA-based)
 ├── codegen/          # LLVM code generation
-├── server/           # LSP server implementation
-├── runtime/          # C runtime library (value.h, value.c)
-├── editors/          # Editor configurations (Zed, etc.)
-├── examples/         # Example YarLang programs
-├── testdata/         # Test YarLang files for LSP
-└── docs/             # Design documents and specifications
+├── runtime/          # Minimal C runtime (println, panic)
+├── stdlib/           # Standard library (Result, Option)
+├── examples/         # Example programs
+├── tests/            # Integration tests
+└── docs/             # Language specification
 ```
 
-## Example Programs
+## Compilation Pipeline
 
-The `examples/` directory contains several programs demonstrating YarLang features:
-
-- `hello.yar` - Simple variable and print statement
-- `arithmetic.yar` - Basic arithmetic operations
-- `conditionals.yar` - If/else statements and comparisons
-- `loops.yar` - For loops with break and continue
-- `functions.yar` - Function definitions, recursion, and parameters
-- `fibonacci.yar` - Recursive Fibonacci implementation
-
-### Example Code
-
-```yar
-// Variables
-x = 42
-name = "YarLang"
-active = true
-
-// Functions
-func add(a, b) {
-    return a + b
-}
-
-result = add(10, 20)
-
-// Control flow
-if result > 25 {
-    x = 100
-} else {
-    x = 0
-}
-
-// Loops
-for i = 0; i < 10; i = i + 1 {
-    result = result + i
-}
-
-// Multiple return values
-func divmod(a, b) {
-    return a / b, a % b
-}
-
-quotient, remainder = divmod(17, 5)
+```
+Source (.yar)
+    ↓
+Lexer → Tokens
+    ↓
+Parser → AST
+    ↓
+Type Checker → Typed AST
+    ↓
+MIR Lowerer → SSA IR
+    ↓
+LLVM Codegen → LLVM IR (.ll)
+    ↓
+Clang → Native Executable
 ```
 
 ## Testing
-
-Run the test suite:
 
 ```bash
 # Run all tests
 go test ./...
 
-# Run tests with coverage
-go test -cover ./...
-
 # Run specific package tests
-go test ./lexer
-go test ./parser
-go test ./analysis
-go test ./server
-go test ./codegen
+go test ./lexer -v
+go test ./parser -v
+go test ./checker -v
+go test ./mir -v
+go test ./codegen -v
+
+# Run integration tests
+go test ./tests -v
+
+# Run test script
+./test_all.sh
 ```
 
-Test the example programs:
+## Implementation Status
 
-```bash
-# Compile and test each example
-for file in examples/*.yar; do
-    echo "Testing $file"
-    ./yar "$file"
-done
-```
+### ✅ Completed
 
-## Implementation Details
+- Lexer with full v0.1.0 token support
+- Parser with ASI (automatic semicolon insertion)
+- Type system with generics
+- Type inference (Hindley-Milner basics)
+- Ownership and move semantics
+- Borrow checking (basic)
+- MIR lowering (SSA-style IR)
+- LLVM code generation
+- Control flow (if/while/for/break/continue)
+- Function calls with type checking
+- String constants
+- Defer statements (MIR-level)
+- ? operator (MIR-level)
+- Result<T,E> and Option<T> types
+- C runtime integration
 
-**Compilation Pipeline:**
+### 🚧 In Progress
 
-1. **Lexer** - Tokenizes source code into tokens
-2. **Parser** - Builds abstract syntax tree (AST)
-3. **Semantic Analyzer** - Resolves scopes and checks for errors
-4. **Code Generator** - Emits LLVM IR
-5. **LLVM/Clang** - Compiles IR to native executable
+- Full borrow checker (lifetimes)
+- Pattern matching
+- Trait system
+- Complete standard library
 
-**Runtime:**
+### 📋 Planned
 
-- Written in C for performance
-- Uses Boehm GC for automatic memory management
-- Dynamic typing with tagged Value\* pointers
-- All values are heap-allocated and GC-managed
-
-**Memory Management:**
-
-- All YarLang values are represented as `Value*` pointers
-- Memory is automatically managed by the Boehm GC
-- No manual memory management required
+- Slice operations
+- Method calls and field access
+- Array literals and indexing
+- Runtime defer support
+- Runtime Result/Option support
+- Error messages with source locations
+- Optimization passes
 
 ## Documentation
 
-- **Language Guide**: [docs/language-guide.md](docs/language-guide.md) - Comprehensive syntax reference
-- **Examples Guide**: [docs/examples.md](docs/examples.md) - Annotated example programs
-- **LSP Server**: [server/README.md](server/README.md) - Complete LSP documentation
+- **[GUIDE.md](GUIDE.md)** - Beginner-friendly setup + language tutorial
+- **[Language Specification](docs/yarlang-v0.1.0.md)** - Complete v0.1.0 spec
+- **[Implementation Plan](docs/plans/)** - Phased development roadmap
+- **[Examples](examples/)** - Sample programs
 
-## Current Status
+## Built-in Functions
 
-**Active Development** - YarLang is under active development with the following features implemented:
+```
+fn println(msg: []u8) -> void    // Print string/byte slice with newline
+fn println(value: i32) -> void   // Print integers
+fn println(value: bool) -> void  // Print booleans
+fn panic(msg: []u8) -> void      // Panic with message
+fn len<T>(xs: []T) -> usize      // Length of slice (strings today)
+```
 
-- ✅ Full lexer and parser with comprehensive tests
-- ✅ Semantic analysis with scope resolution
-- ✅ LLVM code generation to native executables
-- ✅ C runtime with dynamic typing and garbage collection
-- ✅ All core language features (functions, loops, conditionals, etc.)
-- ✅ LSP server with diagnostics, completion, hover, and go-to-definition
-- ✅ Editor integration (Zed)
+## Current Limitations (v0.1.0)
 
-## Future Enhancements
-
-Potential future features:
-
-- Arrays and maps
-- Structs/objects
-- String interpolation
-- Standard library (file I/O, networking, etc.)
-- REPL (read-eval-print loop)
-- Better error messages with source location
-- Optimization passes
-- Additional editor support (VS Code extension)
+- No pattern matching (deferred to v0.2.0)
+- No async/await (library-based concurrency)
+- No macros
+- Simplified defer (no full runtime stack)
+- Simplified ? operator (no full Result runtime)
 
 ## Contributing
 
-Contributions are welcome! Please ensure:
+We welcome contributions! Areas that need help:
+
+1. Standard library implementation
+2. Error message improvements
+3. Documentation and examples
+4. Test coverage
+5. Performance optimizations
+
+Please ensure:
 
 - All tests pass (`go test ./...`)
-- Code follows Go conventions (`go fmt`, `go vet`)
-- New features include tests
-- Commits follow conventional commit format
+- Code follows Go conventions (`go fmt`, `golangci-lint`)
+- Commits use conventional commit format
 
 ## License
 
-MIT
+MIT License - see LICENSE file for details
 
 ## Resources
 
+- [YarLang v0.1.0 Specification](docs/yarlang-v0.1.0.md)
 - [LLVM Documentation](https://llvm.org/docs/)
-- [Language Server Protocol Specification](https://microsoft.github.io/language-server-protocol/)
-- [Boehm GC](https://www.hboehm.info/gc/)
 - [Go Programming Language](https://golang.org/)
+- [The Rust Programming Language](https://www.rust-lang.org/)
 
 ---
 
-Created as a learning project to explore compiler design, language server protocols, LLVM code generation, and language implementation.
+**Status**: Active development - v0.1.0 core features complete, runtime and stdlib in progress.
+
+Created as a learning project exploring compiler design, type systems, ownership semantics, and LLVM code generation.

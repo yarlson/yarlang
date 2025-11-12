@@ -1,2 +1,3 @@
-x = 42
-println(x)
+fn main() {
+	println("Hello, YarLang!")
+}

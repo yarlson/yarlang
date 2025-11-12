@@ -2,177 +2,92 @@ package lexer
 
 import "testing"
 
-func TestLexerBasic(t *testing.T) {
-	input := `x = 42`
-
-	l := New(input)
-
+func TestTokenTypes(t *testing.T) {
 	tests := []struct {
-		expectedType    TokenType
-		expectedLiteral string
+		input    string
+		expected []TokenType
 	}{
-		{IDENT, "x"},
-		{ASSIGN, "="},
-		{NUMBER, "42"},
-		{EOF, ""},
+		{"fn", []TokenType{FN}},
+		{"let", []TokenType{LET}},
+		{"mut", []TokenType{MUT}},
+		{"struct", []TokenType{STRUCT}},
+		{"enum", []TokenType{ENUM}},
+		{"trait", []TokenType{TRAIT}},
+		{"impl", []TokenType{IMPL}},
 	}
 
-	for i, tt := range tests {
-		tok := l.NextToken()
-
-		if tok.Type != tt.expectedType {
-			t.Fatalf("tests[%d] - tokentype wrong. expected=%q, got=%q",
-				i, tt.expectedType, tok.Type)
-		}
-
-		if tok.Literal != tt.expectedLiteral {
-			t.Fatalf("tests[%d] - literal wrong. expected=%q, got=%q",
-				i, tt.expectedLiteral, tok.Literal)
+	for _, tt := range tests {
+		l := New(tt.input)
+		for i, expected := range tt.expected {
+			tok := l.NextToken()
+			if tok.Type != expected {
+				t.Errorf("test[%d] - wrong token type. expected=%v, got=%v",
+					i, expected, tok.Type)
+			}
 		}
 	}
 }
 
-func TestLexerComprehensive(t *testing.T) {
-	input := `
-func add(a, b) {
-	return a + b
+func TestV04Example(t *testing.T) {
+	input := `fn add(a i32, b i32) i32 {
+    return a + b
 }
 
-x = 42
-name = "Alice"
-
-if x > 0 {
-	println("positive")
-} else {
-	println("zero or negative")
+struct Point {
+    x: f64,
+    y: f64,
 }
 
-for i = 0; i < 10; i = i + 1 {
-	print(i)
-}
+let mut x: i32 = 42
+x += 10
 
-// This is a comment
-result = 3.14 * 2
-check = true && false || !true
+let p := &Point{ x: 1.0, y: 2.0 }
 `
 
-	tests := []struct {
-		expectedType    TokenType
-		expectedLiteral string
-	}{
-		{FUNC, "func"},
-		{IDENT, "add"},
-		{LPAREN, "("},
-		{IDENT, "a"},
-		{COMMA, ","},
-		{IDENT, "b"},
-		{RPAREN, ")"},
-		{LBRACE, "{"},
-		{RETURN, "return"},
-		{IDENT, "a"},
-		{PLUS, "+"},
-		{IDENT, "b"},
-		{RBRACE, "}"},
-		{IDENT, "x"},
-		{ASSIGN, "="},
-		{NUMBER, "42"},
-		{IDENT, "name"},
-		{ASSIGN, "="},
-		{STRING, "Alice"},
-		{IF, "if"},
-		{IDENT, "x"},
-		{GT, ">"},
-		{NUMBER, "0"},
-		{LBRACE, "{"},
-		{IDENT, "println"},
-		{LPAREN, "("},
-		{STRING, "positive"},
-		{RPAREN, ")"},
-		{RBRACE, "}"},
-		{ELSE, "else"},
-		{LBRACE, "{"},
-		{IDENT, "println"},
-		{LPAREN, "("},
-		{STRING, "zero or negative"},
-		{RPAREN, ")"},
-		{RBRACE, "}"},
-		{FOR, "for"},
-		{IDENT, "i"},
-		{ASSIGN, "="},
-		{NUMBER, "0"},
-		{SEMICOLON, ";"},
-		{IDENT, "i"},
-		{LT, "<"},
-		{NUMBER, "10"},
-		{SEMICOLON, ";"},
-		{IDENT, "i"},
-		{ASSIGN, "="},
-		{IDENT, "i"},
-		{PLUS, "+"},
-		{NUMBER, "1"},
-		{LBRACE, "{"},
-		{IDENT, "print"},
-		{LPAREN, "("},
-		{IDENT, "i"},
-		{RPAREN, ")"},
-		{RBRACE, "}"},
-		{IDENT, "result"},
-		{ASSIGN, "="},
-		{NUMBER, "3.14"},
-		{STAR, "*"},
-		{NUMBER, "2"},
-		{IDENT, "check"},
-		{ASSIGN, "="},
-		{TRUE, "true"},
-		{AND, "&&"},
-		{FALSE, "false"},
-		{OR, "||"},
-		{NOT, "!"},
-		{TRUE, "true"},
-		{EOF, ""},
-	}
-
 	l := New(input)
 
-	for i, tt := range tests {
+	// Just verify it tokenizes without panics
+	for {
 		tok := l.NextToken()
-
-		if tok.Type != tt.expectedType {
-			t.Fatalf("tests[%d] - tokentype wrong. expected=%q, got=%q (literal=%q)",
-				i, tt.expectedType, tok.Type, tok.Literal)
+		if tok.Type == EOF {
+			break
 		}
 
-		if tok.Literal != tt.expectedLiteral {
-			t.Fatalf("tests[%d] - literal wrong. expected=%q, got=%q",
-				i, tt.expectedLiteral, tok.Literal)
+		if tok.Type == ILLEGAL {
+			t.Fatalf("Illegal token: %s at line %d", tok.Literal, tok.Line)
 		}
 	}
 }
 
-func TestImportKeyword(t *testing.T) {
-	input := `import "math"`
-
-	l := New(input)
-
+func TestFloatParsing(t *testing.T) {
 	tests := []struct {
-		expectedType    TokenType
-		expectedLiteral string
+		input    string
+		expected TokenType
+		literal  string
 	}{
-		{IMPORT, "import"},
-		{STRING, "math"},
-		{EOF, ""},
+		{"1.0", FLOAT, "1.0"},
+		{".5", FLOAT, ".5"},
+		{"5.", FLOAT, "5."},
+		{"1e9", FLOAT, "1e9"},
+		{"3.14e-2", FLOAT, "3.14e-2"},
+		{"0.5", FLOAT, "0.5"},
+		{".123", FLOAT, ".123"},
+		{"99.", FLOAT, "99."},
+		{"2.5e+10", FLOAT, "2.5e+10"},
 	}
 
-	for i, tt := range tests {
+	for _, tt := range tests {
+		l := New(tt.input)
+
 		tok := l.NextToken()
-		if tok.Type != tt.expectedType {
-			t.Fatalf("tests[%d] - wrong type. expected=%q, got=%q",
-				i, tt.expectedType, tok.Type)
+		if tok.Type != tt.expected {
+			t.Errorf("input %q - wrong token type. expected=%v, got=%v",
+				tt.input, tt.expected, tok.Type)
 		}
 
-		if tok.Literal != tt.expectedLiteral {
-			t.Fatalf("tests[%d] - wrong literal. expected=%q, got=%q",
-				i, tt.expectedLiteral, tok.Literal)
+		if tok.Literal != tt.literal {
+			t.Errorf("input %q - wrong literal. expected=%q, got=%q",
+				tt.input, tt.literal, tok.Literal)
 		}
 	}
 }

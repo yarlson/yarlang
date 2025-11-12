@@ -38,3 +38,4 @@ node_modules
 .worktrees
 docs/plans/
 cmd/yarlang/yarlang
+yar

@@ -2,135 +2,62 @@ package ast
 
 import "testing"
 
-func TestNumberLiteralString(t *testing.T) {
-	lit := &NumberLiteral{Value: 42.0}
-	if lit.String() != "42" {
-		t.Errorf("NumberLiteral.String() wrong. got=%q", lit.String())
+func TestTypeNodes(t *testing.T) {
+	// Type path: i32
+	tp := &TypePath{Path: []string{"i32"}}
+	if tp.String() != "i32" {
+		t.Errorf("wrong string: %s", tp.String())
+	}
+
+	// Reference type: &mut T
+	rt := &RefType{Mut: true, Elem: tp}
+	if rt.String() != "&mut i32" {
+		t.Errorf("wrong string: %s", rt.String())
+	}
+
+	// Slice type: []T
+	st := &SliceType{Elem: tp}
+	if st.String() != "[]i32" {
+		t.Errorf("wrong string: %s", st.String())
 	}
 }
 
-func TestBinaryExprString(t *testing.T) {
-	expr := &BinaryExpr{
-		Left:     &NumberLiteral{Value: 1},
-		Operator: "+",
-		Right:    &NumberLiteral{Value: 2},
-	}
-	if expr.String() != "(1 + 2)" {
-		t.Errorf("BinaryExpr.String() wrong. got=%q", expr.String())
-	}
-}
-
-func TestIdentifierWithRange(t *testing.T) {
-	ident := &Identifier{
-		Name: "foo",
-		Range: Range{
-			Start: Position{Line: 1, Column: 5},
-			End:   Position{Line: 1, Column: 8},
+func TestDeclNodes(t *testing.T) {
+	// Function: fn add(a i32, b i32) i32
+	fn := &FuncDecl{
+		Name: "add",
+		Params: []Param{
+			{Name: "a", Type: &TypePath{Path: []string{"i32"}}},
+			{Name: "b", Type: &TypePath{Path: []string{"i32"}}},
 		},
+		ReturnType: &TypePath{Path: []string{"i32"}},
+		Body:       &Block{Stmts: []Stmt{}},
 	}
 
-	if ident.Name != "foo" {
-		t.Errorf("Name = %s, want foo", ident.Name)
-	}
-
-	if ident.Range.Start.Line != 1 || ident.Range.Start.Column != 5 {
-		t.Errorf("Start position incorrect")
-	}
-
-	if ident.Range.End.Line != 1 || ident.Range.End.Column != 8 {
-		t.Errorf("End position incorrect")
+	if fn.Name != "add" {
+		t.Errorf("wrong name: %s", fn.Name)
 	}
 }
 
-func TestExpressionNodesHaveRange(t *testing.T) {
-	// Test that all expression nodes have Range field
-	_ = &NumberLiteral{Value: 42, Range: Range{}}
-	_ = &StringLiteral{Value: "test", Range: Range{}}
-	_ = &BoolLiteral{Value: true, Range: Range{}}
-	_ = &NilLiteral{Range: Range{}}
-	_ = &BinaryExpr{
-		Left:     &Identifier{Name: "a"},
-		Operator: "+",
-		Right:    &Identifier{Name: "b"},
-		Range:    Range{},
+func TestStmtNodes(t *testing.T) {
+	// ShortDecl: x := 42
+	sd := &ShortDecl{
+		Name:  "x",
+		Value: &IntLit{Value: "42"},
 	}
-	_ = &UnaryExpr{
-		Operator: "!",
-		Right:    &Identifier{Name: "x"},
-		Range:    Range{},
-	}
-	_ = &CallExpr{
-		Function: &Identifier{Name: "f"},
-		Args:     []Expr{},
-		Range:    Range{},
-	}
-}
-
-func TestStatementNodesHaveRange(t *testing.T) {
-	// Test that all statement nodes have Range field
-	_ = &ExprStmt{Expr: &NilLiteral{}, Range: Range{}}
-	_ = &AssignStmt{
-		Targets:      []string{"x"},
-		Values:       []Expr{&NumberLiteral{Value: 1}},
-		Range:        Range{},
-		TargetRanges: []Range{{}},
-	}
-	_ = &ReturnStmt{Values: []Expr{}, Range: Range{}}
-	_ = &IfStmt{
-		Condition: &BoolLiteral{Value: true},
-		ThenBlock: &BlockStmt{},
-		Range:     Range{},
-	}
-	_ = &ForStmt{Body: &BlockStmt{}, Range: Range{}}
-	_ = &BreakStmt{Range: Range{}}
-	_ = &ContinueStmt{Range: Range{}}
-	_ = &BlockStmt{Statements: []Stmt{}, Range: Range{}}
-	_ = &FuncDecl{
-		Name:        "foo",
-		Params:      []string{"a"},
-		Body:        &BlockStmt{},
-		Range:       Range{},
-		NameRange:   Range{},
-		ParamRanges: []Range{{}},
-	}
-}
-
-func TestImportStmtString(t *testing.T) {
-	stmt := &ImportStmt{
-		Path: "math",
+	if sd.String() != "x := 42" {
+		t.Errorf("wrong string: %s", sd.String())
 	}
 
-	expected := `import "math"`
-	if stmt.String() != expected {
-		t.Errorf("String() wrong. expected=%q, got=%q",
-			expected, stmt.String())
-	}
-}
-
-func TestImportStmtWithAlias(t *testing.T) {
-	stmt := &ImportStmt{
-		Path:  "math",
-		Alias: "m",
+	// ConstStmt: const MAX: i32 = 100
+	cs := &ConstStmt{
+		Name:  "MAX",
+		Type:  &TypePath{Path: []string{"i32"}},
+		Value: &IntLit{Value: "100"},
 	}
 
-	expected := `import "math" as m`
-	if stmt.String() != expected {
-		t.Errorf("String() wrong. expected=%q, got=%q",
-			expected, stmt.String())
-	}
-}
-
-func TestImportBlockString(t *testing.T) {
-	block := &ImportBlock{
-		Imports: []*ImportStmt{
-			{Path: "math"},
-			{Path: "strings", Alias: "str"},
-		},
-	}
-
-	expected := "import (\n  \"math\"\n  \"strings\" as str\n)"
-	if block.String() != expected {
-		t.Errorf("String() wrong. expected=%q, got=%q",
-			expected, block.String())
+	expected := "const MAX: i32 = 100"
+	if cs.String() != expected {
+		t.Errorf("wrong string: expected=%s, got=%s", expected, cs.String())
 	}
 }
