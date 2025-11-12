@@ -1,0 +1,39 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+yar
+
+# Test binaries
+*.test
+
+# Coverage
+*.out
+coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.o
+*.a
+
+# LLVM artifacts
+*.ll
+*.bc
+
+node_modules
+
+.worktrees
+docs/plans/

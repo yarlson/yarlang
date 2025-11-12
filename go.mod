@@ -1,0 +1,19 @@
+module github.com/yarlson/yarlang
+
+go 1.25.3
+
+require (
+	go.lsp.dev/jsonrpc2 v0.10.0
+	go.lsp.dev/protocol v0.12.0
+	tinygo.org/x/go-llvm v0.0.0-20250929104024-00fb4309ddd2
+)
+
+require (
+	github.com/segmentio/asm v1.2.1 // indirect
+	github.com/segmentio/encoding v0.5.3 // indirect
+	go.lsp.dev/pkg v0.0.0-20210717090340-384b27a52fb2 // indirect
+	go.lsp.dev/uri v0.3.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.27.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+)
