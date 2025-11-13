@@ -6,7 +6,7 @@ fn fib(n i32) i32 {
 }
 
 fn main() {
-	let result: i32 = fib(10)
+	let result = fib(10)
 	println("fib(10) = ")
 	println(result)
 }

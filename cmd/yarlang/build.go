@@ -12,7 +12,32 @@ import (
 	"github.com/yarlson/yarlang/lexer"
 	"github.com/yarlson/yarlang/mir"
 	"github.com/yarlson/yarlang/parser"
+	runtimec "github.com/yarlson/yarlang/runtime"
 )
+
+func materializeRuntime() (string, func(), error) {
+	tmp, err := os.CreateTemp("", "yarlang-runtime-*.c")
+	if err != nil {
+		return "", nil, err
+	}
+
+	if _, err := tmp.Write(runtimec.Source); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", nil, err
+	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", nil, err
+	}
+
+	cleanup := func() {
+		os.Remove(tmp.Name())
+	}
+
+	return tmp.Name(), cleanup, nil
+}
 
 func handleBuild(args []string) {
 	if len(args) < 1 {
@@ -67,8 +92,13 @@ func handleBuild(args []string) {
 		os.Exit(1)
 	}
 
-	// Get runtime path (relative to executable or source)
-	runtimePath := "runtime/runtime.c"
+	// Materialize embedded runtime for clang
+	runtimePath, cleanup, err := materializeRuntime()
+	if err != nil {
+		fmt.Printf("Error preparing runtime: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
 
 	// Compile with clang, linking the runtime
 	cmd := exec.Command("clang", "-O2", llFile, runtimePath, "-o", outputFile)

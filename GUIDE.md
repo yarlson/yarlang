@@ -236,7 +236,7 @@ fn checked_div(a i32, b i32) i32 {
 
 | Function          | Signature                                       | Notes                                                                           |
 | ----------------- | ----------------------------------------------- | ------------------------------------------------------------------------------- |
-| `println(value)`  | Overloaded for `[]u8` (strings), `i32`, `bool`. | Lowered to runtime helpers you linked earlier. More types will arrive later.    |
+| `println(value)`  | Overloaded for `[]u8` (strings), `i32`, `bool`. | Lowered to runtime helpers embedded in the CLI. More types will arrive later.   |
 | `panic(msg []u8)` | Immediately terminates the program.             | Provided by the C runtime.                                                      |
 | `len([]T) usize`  | Length of a byte slice (strings only for now).  | Type inference treats it generically but runtime currently handles byte slices. |
 
@@ -311,7 +311,6 @@ Inspect the generated LLVM IR (`examples/sensors.ll`) if you’re curious how lo
 
 ## 6. Troubleshooting & Tips
 
-- **`clang: error: no such file or directory: 'runtime/runtime.c'`** — run `./yar build` from the repository root so the relative runtime path resolves.
 - **`load i32, <nil>` in LLVM IR** — indicates a bug where the compiler attempted to load from an unallocated pointer. Version `v0.4` fixes this for function parameters by spilling them to the stack automatically.
 - **`panic: use of moved value`** — the checker caught ownership misuse. Borrow (`&value`) instead of moving, or restructure your code.
 - **Inspect IR** when diagnosing codegen issues: search for `%t` temporaries to see how MIR instructions turned into LLVM instructions.

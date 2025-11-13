@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
